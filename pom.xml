@@ -28,6 +28,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <copilot.sdk.version>1.0.28</copilot.sdk.version>
         <copilot.runtime.classifier>linux-x64</copilot.runtime.classifier>
+        <!-- Lets Mockito's Byte Buddy mock classes when tests run on a JDK newer than it officially supports. -->
+        <argLine>-Dnet.bytebuddy.experimental=true</argLine>
     </properties>
 
     <profiles>
