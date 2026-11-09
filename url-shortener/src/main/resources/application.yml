@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: url-shortener
+  datasource:
+    url: jdbc:h2:file:./data/urlshortener
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+
+app:
+  base-url: http://localhost:8080
+  blocked-hosts:
+    - localhost
+    - 127.0.0.1
+    - "::1"
+  max-url-length: 2048
+  code-length: 7
+  max-code-attempts: 5
+  rate-limit:
+    requests: 10
+    window: PT1M

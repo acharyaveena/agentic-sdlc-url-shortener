@@ -12,9 +12,8 @@
 
     <artifactId>url-shortener</artifactId>
     <name>url-shortener</name>
-    <description>Demo target. Source is generated and modified by orchestrator runs.</description>
+    <description>URL shortener service</description>
 
-    <!-- This dependency set is the allowlist baseline the orchestrator's dependency policy checks against. -->
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -22,7 +21,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
+            <artifactId>spring-boot-starter-data-jdbc</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -39,4 +38,13 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 </project>

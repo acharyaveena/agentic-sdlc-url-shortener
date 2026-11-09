@@ -1,0 +1,133 @@
+openapi: 3.0.3
+info:
+  title: URL Shortener API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/links:
+    post:
+      summary: Create a short link
+      operationId: createLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLinkRequest'
+      responses:
+        '201':
+          description: Link created
+          headers:
+            Location:
+              description: The short URL
+              schema: { type: string, format: uri }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          description: Creation rate limit exceeded for this client
+          headers:
+            Retry-After:
+              description: Seconds until the client may retry
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '503':
+          description: Could not allocate a unique short code after the maximum number of attempts
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+  /api/v1/links/{code}/stats:
+    get:
+      summary: Get click statistics for a short link
+      operationId: getLinkStats
+      parameters:
+        - $ref: '#/components/parameters/Code'
+      responses:
+        '200':
+          description: Link statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkStats'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /{code}:
+    get:
+      summary: Redirect to the long URL and count the click
+      operationId: redirect
+      parameters:
+        - $ref: '#/components/parameters/Code'
+      responses:
+        '302':
+          description: Redirect to the stored long URL
+          headers:
+            Location:
+              description: The stored long URL
+              schema: { type: string, format: uri }
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  parameters:
+    Code:
+      name: code
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[0-9A-Za-z]{1,16}$'
+  schemas:
+    CreateLinkRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          description: Absolute http or https URL that does not point back to this service
+          example: https://example.com/page
+    LinkResponse:
+      type: object
+      required: [code, shortUrl, longUrl, createdAt]
+      properties:
+        code:      { type: string, pattern: '^[0-9A-Za-z]{7}$', example: aZ3k9Qp }
+        shortUrl:  { type: string, format: uri, example: http://localhost:8080/aZ3k9Qp }
+        longUrl:   { type: string, format: uri }
+        createdAt: { type: string, format: date-time }
+    LinkStats:
+      type: object
+      required: [code, longUrl, clickCount, createdAt]
+      properties:
+        code:       { type: string }
+        longUrl:    { type: string, format: uri }
+        clickCount: { type: integer, format: int64, minimum: 0 }
+        createdAt:  { type: string, format: date-time }
+    ProblemDetail:
+      type: object
+      description: RFC 7807 problem details
+      properties:
+        type:     { type: string, format: uri }
+        title:    { type: string }
+        status:   { type: integer }
+        detail:   { type: string }
+        instance: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid or missing URL (bad scheme, too long, malformed, user-info, or self-referencing)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+    NotFound:
+      description: Unknown short code
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
