@@ -24,6 +24,20 @@ class WorkflowLoaderTest {
     }
 
     @Test
+    void bundledWorkflowDeclaresGatesAndApprovals() {
+        WorkflowDefinition workflow = loader.loadFromClasspath("workflow.yml");
+
+        assertThat(workflow.stage("requirements").requiredSections())
+                .containsExactly("Problem statement", "Ambiguities", "Assumptions", "Acceptance criteria");
+        assertThat(workflow.stages().stream().filter(s -> s.approval() != null)
+                .map(s -> s.id() + "=" + s.approval()))
+                .containsExactly("requirements=requirements-signoff", "design=design-and-schema",
+                        "release-readiness=release");
+        assertThat(workflow.stage("code").approval()).isNull();
+        assertThat(workflow.stage("code").requiredSections()).isEmpty();
+    }
+
+    @Test
     void parsesEnumsCaseInsensitively() {
         WorkflowDefinition workflow = loader.load(yaml("""
                 name: w

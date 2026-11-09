@@ -2,6 +2,8 @@ package com.veenaacharya.agentic.orchestrator.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -11,10 +13,13 @@ import com.veenaacharya.agentic.orchestrator.engine.StageContext;
 import com.veenaacharya.agentic.orchestrator.engine.StageExecutor;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
+import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
+import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.WorkflowRun;
+import com.veenaacharya.agentic.orchestrator.state.WorkflowRunRepository;
 import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
 import java.io.ByteArrayOutputStream;
@@ -22,8 +27,10 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.boot.DefaultApplicationArguments;
 
 class OrchestratorCliTest {
@@ -32,14 +39,16 @@ class OrchestratorCliTest {
 
     private final WorkflowEngine engine = mock(WorkflowEngine.class);
     private final StageExecutor executor = mock(StageExecutor.class);
+    private final WorkflowRunRepository runs = mock(WorkflowRunRepository.class);
     private final StageExecutionRepository stageExecutions = mock(StageExecutionRepository.class);
+    private final ApprovalService approvals = mock(ApprovalService.class);
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private final OrchestratorCli cli = new OrchestratorCli(engine, executor,
-            new WorkflowLoader().loadFromClasspath("workflow.yml"), stageExecutions,
+            new WorkflowLoader().loadFromClasspath("workflow.yml"), runs, stageExecutions, approvals,
             new PrintStream(buffer, true, StandardCharsets.UTF_8));
 
     @Test
-    void printsUsageWithoutScenario() {
+    void printsUsageWithoutArguments() {
         cli.run(new DefaultApplicationArguments());
 
         assertThat(output()).isEqualTo(OrchestratorCli.USAGE + System.lineSeparator());
@@ -48,7 +57,7 @@ class OrchestratorCliTest {
 
     @Test
     void previewRunsSingleStageWithoutUpstreamInputOrEngine() {
-        when(executor.execute(org.mockito.ArgumentMatchers.any())).thenReturn(StageResult.success("# reqs"));
+        when(executor.execute(any())).thenReturn(StageResult.success("# reqs"));
 
         cli.run(new DefaultApplicationArguments("--stage=requirements", "--request=shorten urls"));
 
@@ -63,23 +72,19 @@ class OrchestratorCliTest {
     }
 
     @Test
-    void previewReportsFailure() {
-        when(executor.execute(org.mockito.ArgumentMatchers.any())).thenReturn(StageResult.failure("timed out"));
+    void previewReportsFailureAndRejectsUnknownStage() {
+        when(executor.execute(any())).thenReturn(StageResult.failure("timed out"));
 
         cli.run(new DefaultApplicationArguments("--stage=design"));
 
         assertThat(output()).isEqualTo("Stage failed: timed out" + System.lineSeparator());
-    }
-
-    @Test
-    void previewRejectsUnknownStage() {
         assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--stage=deploy")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("unknown stage: deploy");
     }
 
     @Test
-    void runsScenarioAndPrintsStageStatuses() {
+    void startsRunAndPrintsStageStatuses() {
         WorkflowRun run = new WorkflowRun("greenfield", ChangeType.GREENFIELD, "build it", NOW);
         run.finish(RunStatus.SUCCEEDED, NOW);
         when(engine.run("greenfield", ChangeType.GREENFIELD, "build it")).thenReturn(run);
@@ -90,21 +95,133 @@ class OrchestratorCliTest {
         cli.run(new DefaultApplicationArguments(
                 "--scenario=greenfield", "--change-type=greenfield", "--request=build it"));
 
-        verify(engine).run("greenfield", ChangeType.GREENFIELD, "build it");
         assertThat(output())
-                .contains("Run " + run.getId() + " (greenfield, greenfield) finished: SUCCEEDED")
+                .contains("Run " + run.getId() + " (greenfield, greenfield): SUCCEEDED")
                 .contains("impact-analysis    SKIPPED");
     }
 
     @Test
-    void defaultsToBrownfieldWithEmptyRequest() {
+    void pausedRunTellsReviewerHowToApproveOrReject() {
         WorkflowRun run = new WorkflowRun("expiry", ChangeType.BROWNFIELD, "", NOW);
+        run.markAwaitingApproval();
         when(engine.run("expiry", ChangeType.BROWNFIELD, "")).thenReturn(run);
-        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+        StageExecution waiting = new StageExecution(run.getId(), "requirements");
+        waiting.start(NOW);
+        waiting.awaitApproval(null);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of(waiting));
+        when(approvals.forRun(run.getId()))
+                .thenReturn(List.of(new Approval(run.getId(), "requirements", "requirements-signoff", NOW)));
 
         cli.run(new DefaultApplicationArguments("--scenario=expiry"));
 
-        verify(engine).run("expiry", ChangeType.BROWNFIELD, "");
+        assertThat(output())
+                .contains("requirements       AWAITING_APPROVAL")
+                .contains("Awaiting approval: requirements (requirements-signoff)")
+                .contains("--approve=" + run.getId() + ":requirements --actor=<you>")
+                .contains("--reject=" + run.getId() + ":requirements --reason=<why> --actor=<you>");
+    }
+
+    @Test
+    void failedStagesShowTheirError() {
+        WorkflowRun run = new WorkflowRun("x", ChangeType.BROWNFIELD, "", NOW);
+        run.finish(RunStatus.FAILED, NOW);
+        when(engine.run("x", ChangeType.BROWNFIELD, "")).thenReturn(run);
+        StageExecution failed = new StageExecution(run.getId(), "code");
+        failed.start(NOW);
+        failed.fail("exit gate failed: missing required sections: [X]", NOW);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of(failed));
+
+        cli.run(new DefaultApplicationArguments("--scenario=x"));
+
+        assertThat(output()).contains("  code: exit gate failed: missing required sections: [X]");
+    }
+
+    @Test
+    void approveRecordsDecisionThenResumesRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        run.finish(RunStatus.SUCCEEDED, NOW);
+        when(approvals.approve("run-1", "design", "alice", "fine"))
+                .thenReturn(new Approval("run-1", "design", "design-and-schema", NOW));
+        when(engine.resume("run-1")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--approve=run-1:design", "--actor=alice", "--reason=fine"));
+
+        InOrder order = inOrder(approvals, engine);
+        order.verify(approvals).approve("run-1", "design", "alice", "fine");
+        order.verify(engine).resume("run-1");
+        assertThat(output()).contains("Approved design (design-and-schema) as alice");
+    }
+
+    @Test
+    void approveDefaultsActorToReviewer() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        when(approvals.approve("run-1", "design", "reviewer", ""))
+                .thenReturn(new Approval("run-1", "design", "design-and-schema", NOW));
+        when(engine.resume("run-1")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--approve=run-1:design"));
+
+        verify(approvals).approve("run-1", "design", "reviewer", "");
+    }
+
+    @Test
+    void rejectNeedsAReason() {
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--reject=run-1:design")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("--reject needs --reason=<text>");
+        verifyNoInteractions(approvals, engine);
+    }
+
+    @Test
+    void rejectRecordsDecisionThenResumesRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        run.finish(RunStatus.FAILED, NOW);
+        when(approvals.reject("run-1", "design", "bob", "too broad"))
+                .thenReturn(new Approval("run-1", "design", "design-and-schema", NOW));
+        when(engine.resume("run-1")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--reject=run-1:design", "--reason=too broad", "--actor=bob"));
+
+        verify(approvals).reject("run-1", "design", "bob", "too broad");
+        verify(engine).resume("run-1");
+        assertThat(output()).contains("Rejected design (design-and-schema) as bob").contains(": FAILED");
+    }
+
+    @Test
+    void malformedApproveTargetIsRejected() {
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--approve=just-a-run")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("expected <run-id>:<stage-id>, was: just-a-run");
+        verifyNoInteractions(approvals, engine);
+    }
+
+    @Test
+    void resumeContinuesRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        when(engine.resume("run-1")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--resume=run-1"));
+
+        verify(engine).resume("run-1");
+        assertThat(output()).contains("(s, greenfield): PENDING");
+    }
+
+    @Test
+    void statusShowsRunWithoutTouchingEngine() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.BROWNFIELD, "", NOW);
+        when(runs.findById("run-1")).thenReturn(Optional.of(run));
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--status=run-1"));
+
+        assertThat(output()).contains("(s, brownfield): PENDING");
+        verifyNoInteractions(engine);
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--status=nope")))
+                .hasMessage("unknown run: nope");
     }
 
     @Test

@@ -37,6 +37,17 @@ class ArtifactWriterTest {
     }
 
     @Test
+    void stageAwaitingApprovalIsWrittenSoAReviewerCanReadIt() throws IOException {
+        StageExecution waiting = new StageExecution("r", "requirements");
+        waiting.start(NOW);
+        waiting.awaitApproval("# for review");
+
+        List<Path> written = new ArtifactWriter().write(tmp.resolve("run-2"), List.of(waiting));
+
+        assertThat(Files.readString(written.get(0))).isEqualTo("# for review");
+    }
+
+    @Test
     void emptyRunWritesNothing() {
         assertThat(new ArtifactWriter().write(tmp.resolve("none"), List.of())).isEmpty();
     }

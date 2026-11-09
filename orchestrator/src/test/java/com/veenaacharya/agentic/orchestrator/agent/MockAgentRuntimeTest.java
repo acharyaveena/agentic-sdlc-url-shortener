@@ -16,10 +16,18 @@ class MockAgentRuntimeTest {
     void returnsDeterministicOutputAndRecordsRequests() {
         MockAgentRuntime runtime = new MockAgentRuntime();
 
-        String output = runtime.complete(request("design"));
+        String output = runtime.complete(request("custom-stage"));
 
-        assertThat(output).isEqualTo("# design (mock output)\n\nmodel: claude-sonnet-5.5");
-        assertThat(runtime.requests()).containsExactly(request("design"));
+        assertThat(output).isEqualTo("# custom-stage (mock output)\n\nmodel: claude-sonnet-5.5");
+        assertThat(runtime.requests()).containsExactly(request("custom-stage"));
+    }
+
+    @Test
+    void bundledOutputIsServedForKnownStages() {
+        String output = new MockAgentRuntime().complete(request("requirements"));
+
+        assertThat(output).contains("## Problem statement", "## Ambiguities", "## Assumptions",
+                "## Acceptance criteria");
     }
 
     @Test
@@ -27,7 +35,7 @@ class MockAgentRuntimeTest {
         MockAgentRuntime runtime = new MockAgentRuntime().respondWith("code", "FILE: x");
 
         assertThat(runtime.complete(request("code"))).isEqualTo("FILE: x");
-        assertThat(runtime.complete(request("tests"))).startsWith("# tests");
+        assertThat(runtime.complete(request("other"))).startsWith("# other");
     }
 
     @Test
@@ -38,7 +46,7 @@ class MockAgentRuntimeTest {
                 .isInstanceOf(AgentException.class)
                 .hasMessage("mock failure for stage code");
         assertThat(runtime.requests()).hasSize(1);
-        assertThat(runtime.complete(request("tests"))).isNotBlank();
+        assertThat(runtime.complete(request("other"))).isNotBlank();
     }
 
     @Test

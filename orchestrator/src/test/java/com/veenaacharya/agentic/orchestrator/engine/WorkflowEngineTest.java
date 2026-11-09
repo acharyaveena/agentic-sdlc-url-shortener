@@ -9,6 +9,11 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
+import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
+import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
+import com.veenaacharya.agentic.orchestrator.gate.StageGates;
+import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
@@ -36,13 +41,16 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 class WorkflowEngineTest {
 
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
-    private static final WorkflowDefinition WORKFLOW = new WorkflowLoader().loadFromClasspath("workflow.yml");
+    private static final WorkflowDefinition WORKFLOW = new WorkflowLoader().loadFromClasspath("workflow-plain.yml");
 
     @Autowired
     private WorkflowRunRepository runs;
 
     @Autowired
     private StageExecutionRepository stageExecutions;
+
+    @Autowired
+    private ApprovalRepository approvalRepository;
 
     @Test
     void greenfieldRunSkipsImpactAnalysisAndPersistsEveryStage() {
@@ -193,7 +201,11 @@ class WorkflowEngineTest {
     }
 
     private WorkflowEngine engine(StageExecutor executor) {
-        return new WorkflowEngine(WORKFLOW, executor, runs, stageExecutions, Clock.fixed(NOW, ZoneOffset.UTC));
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        ApprovalService approvals = new ApprovalService(approvalRepository, stageExecutions, clock,
+                new ApprovalProperties(false), new AgentProperties("mock", null, null, 0));
+        return new WorkflowEngine(WORKFLOW, executor, new StageGates(WORKFLOW, approvals), approvals,
+                runs, stageExecutions, clock);
     }
 
     private Map<String, StageStatus> statuses(WorkflowRun run) {

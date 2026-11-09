@@ -1,12 +1,18 @@
 package com.veenaacharya.agentic.orchestrator.agent;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/** Deterministic runtime for tests and offline runs; needs no Copilot login. */
+/**
+ * Deterministic runtime for tests and offline runs; needs no Copilot login. Answers come from
+ * {@link #respondWith}, else from {@code mock/<stage>.md} on the classpath, else a one-line stub.
+ */
 public class MockAgentRuntime implements AgentRuntime {
 
     private final List<AgentRequest> requests = new CopyOnWriteArrayList<>();
@@ -30,8 +36,23 @@ public class MockAgentRuntime implements AgentRuntime {
         if (failingStages.contains(request.stageId())) {
             throw new AgentException("mock failure for stage " + request.stageId());
         }
-        return cannedOutputs.getOrDefault(request.stageId(),
-                "# " + request.stageId() + " (mock output)\n\nmodel: " + request.model());
+        String canned = cannedOutputs.get(request.stageId());
+        if (canned != null) {
+            return canned;
+        }
+        String bundled = bundledOutput(request.stageId());
+        return bundled != null
+                ? bundled
+                : "# " + request.stageId() + " (mock output)\n\nmodel: " + request.model();
+    }
+
+    private static String bundledOutput(String stageId) {
+        try (InputStream in = MockAgentRuntime.class.getClassLoader()
+                .getResourceAsStream("mock/" + stageId + ".md")) {
+            return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new AgentException("cannot read mock output for stage " + stageId, e);
+        }
     }
 
     public List<AgentRequest> requests() {

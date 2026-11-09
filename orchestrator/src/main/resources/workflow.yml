@@ -1,13 +1,20 @@
 # SDLC stage graph. Validated as a DAG at startup; a stage starts when all dependsOn stages
 # have succeeded or were skipped. Stages with more than one dependency are join points.
+# requiredSections: exit gate (markdown headings the output must contain).
+# approval: a human must approve the output before downstream stages start.
 name: sdlc
 stages:
   - id: requirements
+    requiredSections: [Problem statement, Ambiguities, Assumptions, Acceptance criteria]
+    approval: requirements-signoff
   - id: impact-analysis
     dependsOn: [requirements]
     skipFor: [greenfield]
+    requiredSections: [Affected modules and classes, Affected APIs, Schema changes, Data flows, Risks]
   - id: design
     dependsOn: [impact-analysis]
+    requiredSections: [Design overview, Task plan, API changes, Schema changes, Approvals needed]
+    approval: design-and-schema
   - id: code
     dependsOn: [design]
   - id: tests
@@ -18,5 +25,8 @@ stages:
     dependsOn: [build-test]
   - id: policy-scan
     dependsOn: [build-test]
+    requiredSections: [Findings, Verdict]
   - id: release-readiness
     dependsOn: [docs, policy-scan]
+    requiredSections: [Summary, Validation results, Risks and trade-offs, Limitations, Recommendation]
+    approval: release

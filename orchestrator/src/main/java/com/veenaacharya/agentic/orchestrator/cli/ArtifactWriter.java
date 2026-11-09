@@ -10,15 +10,17 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Writes each succeeded stage's output to {@code <dir>/<stage>.md} so a human can review it. */
+/** Writes stage outputs a human can review (succeeded or awaiting approval) to {@code <dir>/<stage>.md}. */
 public class ArtifactWriter {
 
     public List<Path> write(Path dir, List<StageExecution> stages) {
         try {
-            Files.createDirectories(dir);
             List<Path> written = new ArrayList<>();
             for (StageExecution stage : stages) {
-                if (stage.getStatus() == StageStatus.SUCCEEDED && stage.getOutput() != null) {
+                boolean reviewable = stage.getStatus() == StageStatus.SUCCEEDED
+                        || stage.getStatus() == StageStatus.AWAITING_APPROVAL;
+                if (reviewable && stage.getOutput() != null) {
+                    Files.createDirectories(dir);
                     Path file = dir.resolve(stage.getStageId() + ".md");
                     Files.writeString(file, stage.getOutput(), StandardCharsets.UTF_8);
                     written.add(file);
