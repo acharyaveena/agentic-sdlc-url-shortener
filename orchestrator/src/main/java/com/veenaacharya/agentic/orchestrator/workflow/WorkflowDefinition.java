@@ -20,6 +20,18 @@ public record WorkflowDefinition(String name, List<StageDefinition> stages) {
                 .orElseThrow(() -> new IllegalArgumentException("unknown stage: " + id));
     }
 
+    /** All stages that depend on {@code id}, directly or transitively. */
+    public Set<String> descendantsOf(String id) {
+        stage(id);
+        Set<String> descendants = new LinkedHashSet<>();
+        for (StageDefinition candidate : stages) {
+            if (ancestorsOf(candidate.id()).contains(id)) {
+                descendants.add(candidate.id());
+            }
+        }
+        return descendants;
+    }
+
     /** All stages that {@code id} depends on, directly or transitively. */
     public Set<String> ancestorsOf(String id) {
         Set<String> ancestors = new LinkedHashSet<>();

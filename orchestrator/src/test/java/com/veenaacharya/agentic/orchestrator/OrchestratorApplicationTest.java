@@ -7,6 +7,8 @@ import com.veenaacharya.agentic.orchestrator.agent.AgentRuntime;
 import com.veenaacharya.agentic.orchestrator.agent.MockAgentRuntime;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
+import com.veenaacharya.agentic.orchestrator.replan.ReplanService;
+import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
 import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
@@ -39,10 +41,12 @@ import org.springframework.test.context.DynamicPropertySource;
 class OrchestratorApplicationTest {
 
     private static final Path REPO = createRepo();
+    private static final Path AUDIT = createAuditDir();
 
     @DynamicPropertySource
     static void workspace(DynamicPropertyRegistry registry) {
         registry.add("orchestrator.workspace.root", REPO::toString);
+        registry.add("orchestrator.audit.dir", AUDIT::toString);
         // Stands in for the real Maven build so the test does not start Maven inside Maven.
         List<String> build = TestProcesses.run(TestProcesses.Echo.class, "0", "BUILD", "SUCCESS");
         for (int i = 0; i < build.size(); i++) {
@@ -69,9 +73,23 @@ class OrchestratorApplicationTest {
     @Autowired
     private AgentRuntime runtime;
 
+    @Autowired
+    private ReplanService replans;
+
+    @Autowired
+    private ApprovalRepository approvalRepository;
+
     @BeforeEach
     void startFromMain() {
         TestProcesses.git(REPO, "checkout", "-q", "main");
+    }
+
+    private static Path createAuditDir() {
+        try {
+            return Files.createTempDirectory("orchestrator-audit");
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static Path createRepo() {
@@ -86,20 +104,69 @@ class OrchestratorApplicationTest {
 
     @AfterAll
     static void deleteRepo() throws IOException {
-        Files.walkFileTree(REPO, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                file.toFile().setWritable(true);
-                file.toFile().delete();
-                return FileVisitResult.CONTINUE;
-            }
+        for (Path root : List.of(REPO, AUDIT)) {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    file.toFile().setWritable(true);
+                    file.toFile().delete();
+                    return FileVisitResult.CONTINUE;
+                }
 
-            @Override
-            public FileVisitResult postVisitDirectory(Path dir, IOException e) {
-                dir.toFile().delete();
-                return FileVisitResult.CONTINUE;
-            }
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException e) {
+                    dir.toFile().delete();
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        }
+    }
+
+    @Test
+    void replanningDesignRerunsEverythingBuiltOnItUnderTheSameGovernanceAndAuditsIt() throws IOException {
+        WorkflowRun run = engine.run("e2e-replan", ChangeType.GREENFIELD, "shorten urls");
+        String firstDesign = stage(run, "design").getOutputHash();
+
+        run = replans.replan(run.getId(), "design", "reviewer", "add rate limiting to the plan");
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.AWAITING_APPROVAL);
+        assertThat(stage(run, "requirements").getRevision()).isEqualTo(1);
+        assertThat(stage(run, "design").getRevision()).isEqualTo(2);
+        assertThat(stage(run, "design").getOutputHash()).isNotEqualTo(firstDesign);
+        for (String rerun : List.of("code", "tests", "build-test", "docs", "policy-scan", "release-readiness")) {
+            assertThat(stage(run, rerun).getRevision()).as(rerun).isEqualTo(2);
+        }
+        assertThat(stage(run, "release-readiness").getStatus()).isEqualTo(StageStatus.AWAITING_APPROVAL);
+        assertThat(approvalRepository.findByRunIdOrderByIdAsc(run.getId()).stream()
+                .filter(a -> a.getStageId().equals("release-readiness")).map(a -> a.getStatus().name()).toList())
+                .containsExactly("SUPERSEDED", "PENDING");
+        assertThat(TestProcesses.git(REPO, "log", "--format=%s", "main..HEAD").lines()
+                .filter(s -> s.startsWith("chore(agent): design output")).count()).isEqualTo(2);
+
+        Path auditFile = AUDIT.resolve(run.getId() + ".jsonl");
+        String runId = run.getId();
+        List<com.fasterxml.jackson.databind.JsonNode> events = new java.util.ArrayList<>();
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (String line : Files.readAllLines(auditFile)) {
+            events.add(mapper.readTree(line));
+        }
+        assertThat(events).allSatisfy(e -> {
+            assertThat(e.get("runId").asText()).isEqualTo(runId);
+            assertThat(e.has("stage") && e.has("attempt") && e.has("model") && e.has("inputHash")
+                    && e.has("outputHash") && e.has("decision") && e.has("actor")).isTrue();
         });
+        List<String> names = events.stream().map(e -> e.get("event").asText()).toList();
+        assertThat(names).containsSubsequence("RUN_STARTED", "RUN_PAUSED", "REPLAN_REQUESTED", "RUN_RESUMED",
+                "STAGE_STALE", "RUN_PAUSED");
+        assertThat(events).filteredOn(e -> e.get("event").asText().equals("REPLAN_REQUESTED")).singleElement()
+                .satisfies(e -> {
+                    assertThat(e.get("actor").asText()).isEqualTo("reviewer");
+                    assertThat(e.get("detail").asText()).isEqualTo("add rate limiting to the plan");
+                    assertThat(e.get("outputHash").asText()).isEqualTo(firstDesign);
+                });
+        assertThat(events).filteredOn(e -> e.get("event").asText().equals("STAGE_STALE"))
+                .extracting(e -> e.get("stage").asText())
+                .contains("code", "tests", "build-test", "release-readiness");
     }
 
     @Test

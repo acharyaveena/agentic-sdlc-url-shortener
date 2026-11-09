@@ -6,7 +6,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ApprovalRepository extends JpaRepository<Approval, Long> {
 
-    Optional<Approval> findByRunIdAndStageId(String runId, String stageId);
+    /** Latest approval for the stage; a re-planned stage has one per revision. */
+    Optional<Approval> findFirstByRunIdAndStageIdOrderByIdDesc(String runId, String stageId);
 
     List<Approval> findByRunIdOrderByIdAsc(String runId);
 }

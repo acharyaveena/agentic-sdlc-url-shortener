@@ -46,7 +46,8 @@ public class RetryingStageRunner {
         List<String> models = modelsFor(stage);
         List<AttemptRecord> attempts = new ArrayList<>();
         StageResult result = null;
-        String feedback = null;
+        // A re-planned stage starts with the reviewer's feedback; later attempts get the previous failure.
+        String feedback = context.retryFeedback();
         for (int i = 0; i < models.size(); i++) {
             int number = i + 1;
             Instant started = clock.instant();

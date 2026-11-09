@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
+import com.veenaacharya.agentic.orchestrator.audit.AuditEvent;
+import com.veenaacharya.agentic.orchestrator.audit.RecordingAuditLog;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalStatus;
@@ -29,8 +31,10 @@ class ApprovalServiceTest {
     @Autowired
     private StageExecutionRepository stageRepository;
 
+    private final RecordingAuditLog audit = new RecordingAuditLog();
+
     private ApprovalService service(boolean auto, AgentProperties agent) {
-        return new ApprovalService(approvalRepository, stageRepository, Clock.fixed(NOW, ZoneOffset.UTC),
+        return new ApprovalService(approvalRepository, stageRepository, audit, Clock.fixed(NOW, ZoneOffset.UTC),
                 new ApprovalProperties(auto), agent);
     }
 
@@ -39,6 +43,44 @@ class ApprovalServiceTest {
         stage.start(NOW);
         stage.awaitApproval("output");
         return stageRepository.save(stage);
+    }
+
+    @Test
+    void requestsAndDecisionsAreAuditedWithActorStageAndOutputHash() {
+        ApprovalService service = service(false, MOCK);
+        StageExecution stage = awaitingStage("run-1", "design");
+        service.request(stage, "design-and-schema");
+
+        service.reject("run-1", "design", "bob", "too broad");
+
+        assertThat(audit.names()).containsExactly("APPROVAL_REQUESTED", "APPROVAL_REJECTED");
+        AuditEvent rejected = audit.events().get(1);
+        assertThat(rejected.runId()).isEqualTo("run-1");
+        assertThat(rejected.stage()).isEqualTo("design");
+        assertThat(rejected.revision()).isEqualTo(1);
+        assertThat(rejected.actor()).isEqualTo("bob");
+        assertThat(rejected.decision()).isEqualTo("REJECTED");
+        assertThat(rejected.outputHash()).isEqualTo(stage.getOutputHash()).hasSize(64);
+        assertThat(rejected.detail()).isEqualTo("kind=design-and-schema; reason=too broad");
+        assertThat(rejected.timestamp()).isEqualTo(NOW.toString());
+    }
+
+    @Test
+    void supersedeClosesOnlyAPendingApprovalAndLatestApprovalWins() {
+        ApprovalService service = service(false, MOCK);
+        StageExecution stage = awaitingStage("run-1", "design");
+        service.request(stage, "design-and-schema");
+
+        assertThat(service.supersede(stage, "alice", "re-planned: narrower scope")).get()
+                .extracting(Approval::getStatus, Approval::getDecidedBy)
+                .containsExactly(ApprovalStatus.SUPERSEDED, "alice");
+        assertThat(service.supersede(stage, "alice", "again")).isEmpty();
+
+        Approval second = service.request(stage, "design-and-schema");
+        assertThat(service.find("run-1", "design")).get().extracting(Approval::getId).isEqualTo(second.getId());
+        assertThat(service.forRun("run-1")).extracting(Approval::getStatus)
+                .containsExactly(ApprovalStatus.SUPERSEDED, ApprovalStatus.PENDING);
+        assertThat(audit.names()).containsExactly("APPROVAL_REQUESTED", "APPROVAL_SUPERSEDED", "APPROVAL_REQUESTED");
     }
 
     @Test

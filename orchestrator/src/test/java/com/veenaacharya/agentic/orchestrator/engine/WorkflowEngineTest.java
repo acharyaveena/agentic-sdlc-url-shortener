@@ -10,14 +10,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
-import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
-import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
-import com.veenaacharya.agentic.orchestrator.gate.StageGates;
-import com.veenaacharya.agentic.orchestrator.recovery.RecoveryProperties;
-import com.veenaacharya.agentic.orchestrator.recovery.RetryingStageRunner;
-import com.veenaacharya.agentic.orchestrator.recovery.RollbackStrategy;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
+import com.veenaacharya.agentic.orchestrator.state.DecisionRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
@@ -28,9 +22,7 @@ import com.veenaacharya.agentic.orchestrator.state.WorkflowRunRepository;
 import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowDefinition;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +51,9 @@ class WorkflowEngineTest {
 
     @Autowired
     private StageAttemptRepository attempts;
+
+    @Autowired
+    private DecisionRepository decisions;
 
     @Test
     void greenfieldRunSkipsImpactAnalysisAndPersistsEveryStage() {
@@ -310,16 +305,9 @@ class WorkflowEngineTest {
     }
 
     private WorkflowEngine engine(StageExecutor executor, RunWorkspace workspace) {
-        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        AgentProperties agent = new AgentProperties("mock", null, null, 0);
-        ApprovalService approvals = new ApprovalService(approvalRepository, stageExecutions, clock,
-                new ApprovalProperties(false), agent);
-        StageGates gates = new StageGates(WORKFLOW, approvals);
-        // One attempt and no fallback, so these tests see each stage's first result unchanged.
-        RetryingStageRunner runner = new RetryingStageRunner(executor, gates, agent,
-                new RecoveryProperties(1, Map.of()), clock);
-        return new WorkflowEngine(WORKFLOW, runner, gates, approvals, workspace, RollbackStrategy.NONE,
-                runs, stageExecutions, attempts, clock);
+        // One attempt and no fallback (the fixture default), so these tests see each stage's first result.
+        return new EngineFixture(runs, stageExecutions, attempts, approvalRepository, decisions)
+                .workflow(WORKFLOW).executor(executor).workspace(workspace).engine();
     }
 
     private Map<String, StageStatus> statuses(WorkflowRun run) {

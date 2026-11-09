@@ -6,14 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
 import com.veenaacharya.agentic.orchestrator.agent.AgentStageExecutor;
 import com.veenaacharya.agentic.orchestrator.agent.MockAgentRuntime;
-import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
-import com.veenaacharya.agentic.orchestrator.gate.StageGates;
 import com.veenaacharya.agentic.orchestrator.recovery.RecoveryProperties;
-import com.veenaacharya.agentic.orchestrator.recovery.RetryingStageRunner;
 import com.veenaacharya.agentic.orchestrator.recovery.RollbackResult;
 import com.veenaacharya.agentic.orchestrator.recovery.RollbackStrategy;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
+import com.veenaacharya.agentic.orchestrator.state.DecisionRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
 import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
@@ -26,9 +24,7 @@ import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
 import com.veenaacharya.agentic.orchestrator.workflow.StageDefinition;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowDefinition;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +55,9 @@ class WorkflowEngineRecoveryTest {
 
     @Autowired
     private StageAttemptRepository attempts;
+
+    @Autowired
+    private DecisionRepository decisions;
 
     private final MockAgentRuntime runtime = new MockAgentRuntime();
     private final RecordingWorkspace workspace = new RecordingWorkspace();
@@ -209,8 +208,7 @@ class WorkflowEngineRecoveryTest {
     }
 
     private ApprovalService approvals(boolean autoApprove) {
-        return new ApprovalService(approvalRepository, stageExecutions, Clock.fixed(NOW, ZoneOffset.UTC),
-                new ApprovalProperties(autoApprove), AGENT);
+        return fixture(WORKFLOW, executor(), autoApprove, RECOVERY).approvals();
     }
 
     private WorkflowEngine engine(boolean autoApprove) {
@@ -219,12 +217,14 @@ class WorkflowEngineRecoveryTest {
 
     private WorkflowEngine engine(WorkflowDefinition workflow, StageExecutor executor, boolean autoApprove,
                                   RecoveryProperties recovery) {
-        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        ApprovalService approvals = approvals(autoApprove);
-        StageGates gates = new StageGates(workflow, approvals);
-        RetryingStageRunner runner = new RetryingStageRunner(executor, gates, AGENT, recovery, clock);
-        return new WorkflowEngine(workflow, runner, gates, approvals, workspace, rollback, runs, stageExecutions,
-                attempts, clock);
+        return fixture(workflow, executor, autoApprove, recovery).engine();
+    }
+
+    private EngineFixture fixture(WorkflowDefinition workflow, StageExecutor executor, boolean autoApprove,
+                                  RecoveryProperties recovery) {
+        return new EngineFixture(runs, stageExecutions, attempts, approvalRepository, decisions)
+                .workflow(workflow).executor(executor).agent(AGENT).recovery(recovery).autoApprove(autoApprove)
+                .workspace(workspace).rollback(rollback);
     }
 
     /** Model-backed stages use the mock agent; build and policy-scan stages are stood in for. */

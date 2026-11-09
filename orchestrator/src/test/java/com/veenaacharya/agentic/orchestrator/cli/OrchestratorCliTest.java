@@ -10,11 +10,17 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.veenaacharya.agentic.orchestrator.agent.AgentStageExecutor;
+import com.veenaacharya.agentic.orchestrator.audit.AuditLog;
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
+import com.veenaacharya.agentic.orchestrator.metrics.MetricsReport;
+import com.veenaacharya.agentic.orchestrator.metrics.MetricsService;
+import com.veenaacharya.agentic.orchestrator.replan.ReplanService;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
+import com.veenaacharya.agentic.orchestrator.state.Decision;
+import com.veenaacharya.agentic.orchestrator.state.DecisionRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
 import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
@@ -27,8 +33,10 @@ import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,10 +53,104 @@ class OrchestratorCliTest {
     private final StageExecutionRepository stageExecutions = mock(StageExecutionRepository.class);
     private final StageAttemptRepository attempts = mock(StageAttemptRepository.class);
     private final ApprovalService approvals = mock(ApprovalService.class);
+    private final ReplanService replans = mock(ReplanService.class);
+    private final MetricsService metrics = mock(MetricsService.class);
+    private final DecisionRepository decisions = mock(DecisionRepository.class);
+    private final AuditLog audit = new AuditLog() {
+        @Override
+        public void record(com.veenaacharya.agentic.orchestrator.audit.AuditEvent event) {
+        }
+
+        @Override
+        public Optional<Path> fileFor(String runId) {
+            return Optional.of(Path.of("audit", runId + ".jsonl"));
+        }
+    };
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private final OrchestratorCli cli = new OrchestratorCli(engine, executor,
             new WorkflowLoader().loadFromClasspath("workflow.yml"), runs, stageExecutions, attempts, approvals,
+            new OrchestratorCli.Collaborators(replans, metrics, decisions, audit),
             new PrintStream(buffer, true, StandardCharsets.UTF_8));
+
+    @Test
+    void replanCommandRedoesTheStageWithTheReasonAndReportsTheRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        run.markAwaitingApproval();
+        when(replans.replan("run-1", "requirements", "alice", "include analytics retention")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--replan=run-1:requirements", "--reason=include analytics retention",
+                "--actor=alice"));
+
+        verify(replans).replan("run-1", "requirements", "alice", "include analytics retention");
+        assertThat(output()).startsWith("Re-planning requirements")
+                .contains("Audit log: " + Path.of("audit", run.getId() + ".jsonl"));
+        verifyNoInteractions(engine);
+    }
+
+    @Test
+    void replanNeedsAReason() {
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--replan=run-1:design")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("--replan needs --reason=<text>");
+        verifyNoInteractions(replans);
+    }
+
+    @Test
+    void rejectWithReplanRecordsTheRejectionThenRedoesTheStageInsteadOfFailingTheRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        when(approvals.reject("run-1", "design", "bob", "split analytics into phases"))
+                .thenReturn(new Approval("run-1", "design", "design-and-schema", NOW));
+        when(replans.replan("run-1", "design", "bob", "split analytics into phases")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--reject=run-1:design", "--reason=split analytics into phases",
+                "--actor=bob", "--replan"));
+
+        InOrder order = inOrder(approvals, replans);
+        order.verify(approvals).reject("run-1", "design", "bob", "split analytics into phases");
+        order.verify(replans).replan("run-1", "design", "bob", "split analytics into phases");
+        verifyNoInteractions(engine);
+        assertThat(output()).contains("Rejected design (design-and-schema) as bob")
+                .contains("Re-planning design with the rejection reason as feedback");
+    }
+
+    @Test
+    void metricsForAllRunsOrOneRunArePrintedAsMarkdown() {
+        MetricsReport report = new MetricsReport("all runs", 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, null, 0,
+                null, null, Map.of(), 0, 0, null, 0);
+        when(metrics.forAllRuns()).thenReturn(report);
+        when(metrics.forRun("run-1")).thenReturn(report);
+
+        cli.run(new DefaultApplicationArguments("--metrics"));
+        cli.run(new DefaultApplicationArguments("--metrics=run-1"));
+
+        verify(metrics).forAllRuns();
+        verify(metrics).forRun("run-1");
+        assertThat(output()).startsWith("## Metrics (all runs)").contains("| Success rate | 100% (1 of 1 finished runs) |");
+    }
+
+    @Test
+    void lineageListsEachDecisionWithShortHashesAndWhatItWasBuiltFrom() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "", NOW);
+        when(runs.findById("run-1")).thenReturn(Optional.of(run));
+        StageExecution design = new StageExecution("run-1", "design");
+        design.recordInputs("i".repeat(64), Map.of("requirements", "a".repeat(64)));
+        design.start(NOW);
+        design.succeed("plan", NOW);
+        when(decisions.findByRunIdOrderByIdAsc("run-1")).thenReturn(List.of(new Decision(design, "claude-opus-5.5", NOW)));
+
+        cli.run(new DefaultApplicationArguments("--lineage=run-1"));
+
+        assertThat(output()).contains("Lineage of run run-1")
+                .contains("design")
+                .contains("iiiiiiiiii")
+                .contains(design.getOutputHash().substring(0, 10))
+                .contains("claude-opus-5.5")
+                .contains("requirements=aaaaaaaaaa");
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--lineage=nope")))
+                .hasMessage("unknown run: nope");
+    }
 
     @Test
     void printsUsageWithoutArguments() {
