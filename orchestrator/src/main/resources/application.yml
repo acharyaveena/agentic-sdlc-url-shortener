@@ -50,3 +50,6 @@ orchestrator:
       - org.mockito
       - org.assertj
       - org.apache.maven.plugins
+      # Reviewed and approved with the greenfield design: OpenAPI validation in tests and the coverage gate.
+      - io.swagger.parser.v3
+      - org.jacoco
