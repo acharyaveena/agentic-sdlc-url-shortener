@@ -41,6 +41,7 @@ public class WorkflowEngine {
     private final StageExecutor executor;
     private final StageGates gates;
     private final ApprovalService approvals;
+    private final RunWorkspace workspace;
     private final WorkflowRunRepository runs;
     private final StageExecutionRepository stageExecutions;
     private final Clock clock;
@@ -49,6 +50,7 @@ public class WorkflowEngine {
                           StageExecutor executor,
                           StageGates gates,
                           ApprovalService approvals,
+                          RunWorkspace workspace,
                           WorkflowRunRepository runs,
                           StageExecutionRepository stageExecutions,
                           Clock clock) {
@@ -57,13 +59,16 @@ public class WorkflowEngine {
         this.executor = executor;
         this.gates = gates;
         this.approvals = approvals;
+        this.workspace = workspace;
         this.runs = runs;
         this.stageExecutions = stageExecutions;
         this.clock = clock;
     }
 
     public WorkflowRun run(String scenario, ChangeType changeType, String request) {
-        WorkflowRun run = runs.save(new WorkflowRun(scenario, changeType, request, clock.instant()));
+        WorkflowRun fresh = new WorkflowRun(scenario, changeType, request, clock.instant());
+        fresh.assignBranch(workspace.startRun(fresh));
+        WorkflowRun run = runs.save(fresh);
         for (String stageId : order) {
             stageExecutions.save(new StageExecution(run.getId(), stageId));
         }
@@ -82,6 +87,7 @@ public class WorkflowEngine {
 
     private WorkflowRun drive(String runId) {
         WorkflowRun run = runs.findById(runId).orElseThrow();
+        workspace.resumeRun(run);
         Map<String, StageExecution> executions = new LinkedHashMap<>();
         stageExecutions.findByRunIdOrderByIdAsc(runId).forEach(s -> executions.put(s.getStageId(), s));
         run.markRunning();
@@ -188,6 +194,8 @@ public class WorkflowEngine {
             GateResult exit = gates.checkExit(stage, result.output());
             if (!exit.passed()) {
                 execution.fail("exit gate failed: " + exit.summary(), clock.instant());
+            } else if (!committed(execution, result)) {
+                return;
             } else if (stage.approval() != null) {
                 execution.awaitApproval(result.output());
                 stageExecutions.save(execution);
@@ -203,6 +211,18 @@ public class WorkflowEngine {
             }
         }
         stageExecutions.save(execution);
+    }
+
+    /** A stage only counts as done once its commit exists; a failed commit fails the stage. */
+    private boolean committed(StageExecution execution, StageResult result) {
+        try {
+            workspace.commitStage(execution.getRunId(), execution.getStageId(), result.output(), result.files());
+            return true;
+        } catch (RuntimeException e) {
+            execution.fail("commit failed: " + e.getMessage(), clock.instant());
+            stageExecutions.save(execution);
+            return false;
+        }
     }
 
     private static Completion awaitNext(CompletionService<Completion> completions) {

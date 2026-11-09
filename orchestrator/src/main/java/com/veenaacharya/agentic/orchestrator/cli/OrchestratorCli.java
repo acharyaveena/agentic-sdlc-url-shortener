@@ -1,7 +1,7 @@
 package com.veenaacharya.agentic.orchestrator.cli;
 
+import com.veenaacharya.agentic.orchestrator.agent.AgentStageExecutor;
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
-import com.veenaacharya.agentic.orchestrator.engine.StageExecutor;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
@@ -40,7 +40,7 @@ public class OrchestratorCli implements ApplicationRunner {
     static final String DEFAULT_ACTOR = "reviewer";
 
     private final WorkflowEngine engine;
-    private final StageExecutor executor;
+    private final AgentStageExecutor preview;
     private final WorkflowDefinition workflow;
     private final WorkflowRunRepository runs;
     private final StageExecutionRepository stageExecutions;
@@ -49,17 +49,17 @@ public class OrchestratorCli implements ApplicationRunner {
     private final PrintStream out;
 
     @Autowired
-    public OrchestratorCli(WorkflowEngine engine, StageExecutor executor, WorkflowDefinition workflow,
+    public OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
                            WorkflowRunRepository runs, StageExecutionRepository stageExecutions,
                            ApprovalService approvals) {
-        this(engine, executor, workflow, runs, stageExecutions, approvals, System.out);
+        this(engine, preview, workflow, runs, stageExecutions, approvals, System.out);
     }
 
-    OrchestratorCli(WorkflowEngine engine, StageExecutor executor, WorkflowDefinition workflow,
+    OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
                     WorkflowRunRepository runs, StageExecutionRepository stageExecutions,
                     ApprovalService approvals, PrintStream out) {
         this.engine = engine;
-        this.executor = executor;
+        this.preview = preview;
         this.workflow = workflow;
         this.runs = runs;
         this.stageExecutions = stageExecutions;
@@ -139,7 +139,7 @@ public class OrchestratorCli implements ApplicationRunner {
         StageContext context = new StageContext("preview", workflow.stage(stageId), changeType,
                 option(args, "request", ""), Map.of());
 
-        StageResult result = executor.execute(context);
+        StageResult result = preview.execute(context);
 
         out.println(result.succeeded() ? result.output() : "Stage failed: " + result.error());
     }

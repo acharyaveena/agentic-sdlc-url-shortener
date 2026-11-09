@@ -207,9 +207,18 @@ class WorkflowEngineApprovalTest {
 
     private WorkflowEngine engine(boolean autoApprove) {
         ApprovalService approvals = approvals(autoApprove);
-        return new WorkflowEngine(WORKFLOW, new AgentStageExecutor(runtime, AGENT),
-                new StageGates(WORKFLOW, approvals), approvals, runs, stageExecutions,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+        return new WorkflowEngine(WORKFLOW, executor(), new StageGates(WORKFLOW, approvals), approvals,
+                RunWorkspace.NONE, runs, stageExecutions, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    /** Model-backed stages use the mock agent; build and policy-scan stages are stood in for. */
+    private StageExecutor executor() {
+        AgentStageExecutor agent = new AgentStageExecutor(runtime, AGENT);
+        return context -> switch (context.stage().kind()) {
+            case "build" -> StageResult.success("## Build result\n\nExit code: 0\n");
+            case "policy-scan" -> StageResult.success("## Findings\nnone\n\n## Verdict\nPASS\n");
+            default -> agent.execute(context);
+        };
     }
 
     private Map<String, StageStatus> statuses(WorkflowRun run) {

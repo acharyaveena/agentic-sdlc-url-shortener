@@ -42,6 +42,9 @@ public class WorkflowRun {
 
     private Instant finishedAt;
 
+    /** Git branch holding this run's commits; null when the run is not tied to a repository. */
+    private String branch;
+
     protected WorkflowRun() {
     }
 
@@ -60,6 +63,14 @@ public class WorkflowRun {
 
     public void markAwaitingApproval() {
         this.status = RunStatus.AWAITING_APPROVAL;
+    }
+
+    public void assignBranch(String branchName) {
+        this.branch = branchName;
+    }
+
+    public String getBranch() {
+        return branch;
     }
 
     public void finish(RunStatus finalStatus, Instant at) {

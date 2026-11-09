@@ -21,10 +21,14 @@ class PromptBuilderTest {
     private final PromptBuilder builder = new PromptBuilder(properties);
 
     @Test
-    void everyWorkflowStageHasAPromptTemplate() {
+    void everyModelBackedStageHasAPromptTemplate() {
         WorkflowDefinition workflow = new WorkflowLoader().loadFromClasspath("workflow.yml");
+        List<StageDefinition> modelBacked = workflow.stages().stream()
+                .filter(s -> s.kind().equals("agent") || s.kind().equals("files")).toList();
 
-        for (StageDefinition stage : workflow.stages()) {
+        assertThat(modelBacked).extracting(StageDefinition::id).containsExactly(
+                "requirements", "impact-analysis", "design", "code", "tests", "docs", "release-readiness");
+        for (StageDefinition stage : modelBacked) {
             AgentRequest request = builder.build(context(stage.id(), Map.of()));
 
             assertThat(request.systemPrompt()).as(stage.id()).startsWith("You are the ");

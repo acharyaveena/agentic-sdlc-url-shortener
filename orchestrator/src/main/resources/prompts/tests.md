@@ -5,8 +5,10 @@ Write tests for every task of the approved design that belongs to the tests stag
 Return each file in this exact format, with nothing between files except blank lines:
 
 FILE: url-shortener/<path relative to the repository root>
-```<language>
+````<language>
 <complete file contents>
-```
+````
+
+Always use a fence of four backticks around file contents, so files that contain triple backticks stay intact.
 
 Only write paths inside `url-shortener/src/test/`. After the last file, add a short "Coverage" section mapping each acceptance criterion to the tests that verify it.

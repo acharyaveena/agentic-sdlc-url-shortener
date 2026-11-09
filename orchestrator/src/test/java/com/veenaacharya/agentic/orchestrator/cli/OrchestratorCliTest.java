@@ -9,8 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.veenaacharya.agentic.orchestrator.agent.AgentStageExecutor;
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
-import com.veenaacharya.agentic.orchestrator.engine.StageExecutor;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
@@ -38,7 +38,7 @@ class OrchestratorCliTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     private final WorkflowEngine engine = mock(WorkflowEngine.class);
-    private final StageExecutor executor = mock(StageExecutor.class);
+    private final AgentStageExecutor executor = mock(AgentStageExecutor.class);
     private final WorkflowRunRepository runs = mock(WorkflowRunRepository.class);
     private final StageExecutionRepository stageExecutions = mock(StageExecutionRepository.class);
     private final ApprovalService approvals = mock(ApprovalService.class);

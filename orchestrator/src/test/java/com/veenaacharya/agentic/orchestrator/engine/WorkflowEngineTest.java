@@ -1,6 +1,7 @@
 package com.veenaacharya.agentic.orchestrator.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
@@ -200,12 +201,109 @@ class WorkflowEngineTest {
         assertThat(contexts.get("design").upstreamOutputs().keySet()).containsExactly("requirements");
     }
 
+    @Test
+    void runGetsItsOwnBranchAndEachExecutedStageIsCommittedOnceWithItsFiles() {
+        RecordingWorkspace workspace = new RecordingWorkspace();
+
+        WorkflowRun run = engine(ctx -> StageResult.success("out-" + ctx.stage().id(),
+                List.of("url-shortener/" + ctx.stage().id())), workspace).run("greenfield", ChangeType.GREENFIELD, "req");
+
+        assertThat(run.getBranch()).isEqualTo("agent/test-branch");
+        assertThat(runs.findById(run.getId()).orElseThrow().getBranch()).isEqualTo("agent/test-branch");
+        assertThat(workspace.started).isEqualTo(1);
+        assertThat(workspace.commits).extracting(c -> c.stage())
+                .containsExactlyInAnyOrder("requirements", "design", "code", "tests", "build-test", "docs",
+                        "policy-scan", "release-readiness");
+        assertThat(workspace.commits).allSatisfy(c -> {
+            assertThat(c.runId()).isEqualTo(run.getId());
+            assertThat(c.output()).isEqualTo("out-" + c.stage());
+            assertThat(c.files()).containsExactly("url-shortener/" + c.stage());
+        });
+    }
+
+    @Test
+    void failedStageIsNotCommitted() {
+        RecordingWorkspace workspace = new RecordingWorkspace();
+
+        engine(ctx -> ctx.stage().id().equals("code") ? StageResult.failure("x") : StageResult.success("ok"),
+                workspace).run("failing", ChangeType.GREENFIELD, "req");
+
+        assertThat(workspace.commits).extracting(c -> c.stage()).containsExactlyInAnyOrder(
+                "requirements", "design", "tests");
+    }
+
+    @Test
+    void failedCommitFailsTheStageAndBlocksDownstream() {
+        RecordingWorkspace workspace = new RecordingWorkspace();
+        workspace.failCommitFor = "design";
+
+        WorkflowRun run = engine(ctx -> StageResult.success("ok"), workspace)
+                .run("commit-fail", ChangeType.GREENFIELD, "req");
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(stage(run, "design").getStatus()).isEqualTo(StageStatus.FAILED);
+        assertThat(stage(run, "design").getError()).isEqualTo("commit failed: git is unhappy");
+        assertThat(stage(run, "code").getStatus()).isEqualTo(StageStatus.BLOCKED);
+    }
+
+    @Test
+    void dirtyWorkspaceRefusesTheRunBeforeAnythingIsPersisted() {
+        RecordingWorkspace workspace = new RecordingWorkspace();
+        workspace.refuseStart = true;
+        long runsBefore = runs.count();
+        long stagesBefore = stageExecutions.count();
+
+        assertThatThrownBy(() -> engine(ctx -> StageResult.success("ok"), workspace)
+                .run("dirty", ChangeType.GREENFIELD, "req"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("working tree is dirty");
+
+        assertThat(runs.count()).isEqualTo(runsBefore);
+        assertThat(stageExecutions.count()).isEqualTo(stagesBefore);
+    }
+
+    private record Commit(String runId, String stage, String output, List<String> files) {
+    }
+
+    private static final class RecordingWorkspace implements RunWorkspace {
+
+        final List<Commit> commits = new CopyOnWriteArrayList<>();
+        int started;
+        boolean refuseStart;
+        String failCommitFor;
+
+        @Override
+        public String startRun(WorkflowRun run) {
+            if (refuseStart) {
+                throw new IllegalStateException("working tree is dirty");
+            }
+            started++;
+            return "agent/test-branch";
+        }
+
+        @Override
+        public void resumeRun(WorkflowRun run) {
+        }
+
+        @Override
+        public void commitStage(String runId, String stageId, String output, List<String> files) {
+            if (stageId.equals(failCommitFor)) {
+                throw new IllegalStateException("git is unhappy");
+            }
+            commits.add(new Commit(runId, stageId, output, files));
+        }
+    }
+
     private WorkflowEngine engine(StageExecutor executor) {
+        return engine(executor, RunWorkspace.NONE);
+    }
+
+    private WorkflowEngine engine(StageExecutor executor, RunWorkspace workspace) {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         ApprovalService approvals = new ApprovalService(approvalRepository, stageExecutions, clock,
                 new ApprovalProperties(false), new AgentProperties("mock", null, null, 0));
         return new WorkflowEngine(WORKFLOW, executor, new StageGates(WORKFLOW, approvals), approvals,
-                runs, stageExecutions, clock);
+                workspace, runs, stageExecutions, clock);
     }
 
     private Map<String, StageStatus> statuses(WorkflowRun run) {

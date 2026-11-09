@@ -38,6 +38,15 @@ class WorkflowLoaderTest {
     }
 
     @Test
+    void bundledWorkflowDeclaresHowEachStageExecutes() {
+        WorkflowDefinition workflow = loader.loadFromClasspath("workflow.yml");
+
+        assertThat(workflow.stages()).extracting(s -> s.id() + "=" + s.kind()).containsExactly(
+                "requirements=agent", "impact-analysis=agent", "design=agent", "code=files", "tests=files",
+                "build-test=build", "docs=files", "policy-scan=policy-scan", "release-readiness=agent");
+    }
+
+    @Test
     void parsesEnumsCaseInsensitively() {
         WorkflowDefinition workflow = loader.load(yaml("""
                 name: w

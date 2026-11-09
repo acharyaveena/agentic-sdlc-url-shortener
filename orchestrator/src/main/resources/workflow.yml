@@ -2,6 +2,8 @@
 # have succeeded or were skipped. Stages with more than one dependency are join points.
 # requiredSections: exit gate (markdown headings the output must contain).
 # approval: a human must approve the output before downstream stages start.
+# kind: agent (default, text only) | files (agent output is policy-checked and written under url-shortener/)
+#       | build (real Maven build of url-shortener/) | policy-scan (rules re-checked over the whole tree).
 name: sdlc
 stages:
   - id: requirements
@@ -17,14 +19,19 @@ stages:
     approval: design-and-schema
   - id: code
     dependsOn: [design]
+    kind: files
   - id: tests
     dependsOn: [design]
+    kind: files
   - id: build-test
     dependsOn: [code, tests]
+    kind: build
   - id: docs
     dependsOn: [build-test]
+    kind: files
   - id: policy-scan
     dependsOn: [build-test]
+    kind: policy-scan
     requiredSections: [Findings, Verdict]
   - id: release-readiness
     dependsOn: [docs, policy-scan]
