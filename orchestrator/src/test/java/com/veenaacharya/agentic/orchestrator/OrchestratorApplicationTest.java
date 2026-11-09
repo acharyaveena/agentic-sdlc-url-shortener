@@ -2,9 +2,14 @@ package com.veenaacharya.agentic.orchestrator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.veenaacharya.agentic.orchestrator.agent.AgentRequest;
+import com.veenaacharya.agentic.orchestrator.agent.AgentRuntime;
+import com.veenaacharya.agentic.orchestrator.agent.MockAgentRuntime;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
+import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
+import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageStatus;
@@ -20,6 +25,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -56,6 +62,17 @@ class OrchestratorApplicationTest {
 
     @Autowired
     private StageExecutionRepository stageExecutions;
+
+    @Autowired
+    private StageAttemptRepository attempts;
+
+    @Autowired
+    private AgentRuntime runtime;
+
+    @BeforeEach
+    void startFromMain() {
+        TestProcesses.git(REPO, "checkout", "-q", "main");
+    }
 
     private static Path createRepo() {
         try {
@@ -127,6 +144,49 @@ class OrchestratorApplicationTest {
 
         assertThat(run.getStatus()).isEqualTo(RunStatus.SUCCEEDED);
         assertThat(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).hasSize(9);
+    }
+
+    @Test
+    void failingDesignRecoversOnTheFallbackModelWithTheFailureInItsPrompt() {
+        WorkflowRun run = engine.run("e2e-fallback", ChangeType.GREENFIELD, "shorten urls", "design:2");
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.AWAITING_APPROVAL);
+        assertThat(attempts.findByRunIdOrderByIdAsc(run.getId()).stream()
+                .filter(a -> a.getStageId().equals("design")).toList())
+                .extracting(StageAttempt::getModel, StageAttempt::isSucceeded)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("claude-opus-5.5", false),
+                        org.assertj.core.groups.Tuple.tuple("claude-opus-5.5", false),
+                        org.assertj.core.groups.Tuple.tuple("claude-sonnet-5.5", true));
+        AgentRequest designCall = ((MockAgentRuntime) runtime).requests().stream()
+                .filter(r -> r.runId().equals(run.getId()) && r.stageId().equals("design"))
+                .reduce((first, second) -> second).orElseThrow();
+        assertThat(designCall.model()).isEqualTo("claude-sonnet-5.5");
+        assertThat(designCall.userPrompt())
+                .contains("## Previous attempt failed\nchaos: injected failure on attempt 2");
+    }
+
+    @Test
+    void permanentBuildFailureRollsTheBranchBackToTheApprovedDesignAndKeepsTheFailedState() {
+        WorkflowRun run = engine.run("e2e-rollback", ChangeType.GREENFIELD, "shorten urls", "build-test:always");
+
+        String tag = "agent-failed/" + run.getId().substring(0, 8);
+        String designCommit = stage(run, "design").getCommitSha();
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
+        assertThat(run.getStopReason())
+                .isEqualTo("stage build-test failed after 1 attempt(s): chaos: injected failure on attempt 1");
+        assertThat(run.getRollbackTarget()).isEqualTo(designCommit);
+        assertThat(run.getPreservedRef()).isEqualTo(tag);
+
+        assertThat(TestProcesses.git(REPO, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo(run.getBranch());
+        assertThat(TestProcesses.git(REPO, "rev-parse", "HEAD")).isEqualTo(designCommit);
+        assertThat(TestProcesses.git(REPO, "status", "--porcelain")).isEmpty();
+        assertThat(REPO.resolve("url-shortener/src/main/java/com/veenaacharya/shortener/ShortCodeGenerator.java"))
+                .doesNotExist();
+        assertThat(TestProcesses.git(REPO, "log", "--format=%s", designCommit + ".." + tag).lines()
+                .map(s -> s.replaceAll("^chore\\(agent\\): | output \\[run .*$", "")).toList())
+                .containsExactlyInAnyOrder("code", "tests");
+        assertThat(stage(run, "docs").getStatus()).isEqualTo(StageStatus.BLOCKED);
     }
 
     private StageExecution stage(WorkflowRun run, String stageId) {

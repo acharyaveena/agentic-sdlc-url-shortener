@@ -7,6 +7,9 @@ import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalStatus;
+import com.veenaacharya.agentic.orchestrator.state.RunStatus;
+import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
+import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageStatus;
@@ -31,6 +34,7 @@ public class OrchestratorCli implements ApplicationRunner {
     static final String USAGE = String.join(System.lineSeparator(),
             "Usage:",
             "  --scenario=<name> [--change-type=greenfield|brownfield] [--request=<text>]   start a run",
+            "      [--chaos=<stage>:<count|always>[,...]]                                    inject failures to demo recovery",
             "  --approve=<run>:<stage> [--actor=<name>] [--reason=<text>]                    approve, then resume",
             "  --reject=<run>:<stage> --reason=<text> [--actor=<name>]                       reject, then resume",
             "  --resume=<run>                                                                continue a paused run",
@@ -44,6 +48,7 @@ public class OrchestratorCli implements ApplicationRunner {
     private final WorkflowDefinition workflow;
     private final WorkflowRunRepository runs;
     private final StageExecutionRepository stageExecutions;
+    private final StageAttemptRepository attempts;
     private final ApprovalService approvals;
     private final ArtifactWriter artifacts = new ArtifactWriter();
     private final PrintStream out;
@@ -51,18 +56,19 @@ public class OrchestratorCli implements ApplicationRunner {
     @Autowired
     public OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
                            WorkflowRunRepository runs, StageExecutionRepository stageExecutions,
-                           ApprovalService approvals) {
-        this(engine, preview, workflow, runs, stageExecutions, approvals, System.out);
+                           StageAttemptRepository attempts, ApprovalService approvals) {
+        this(engine, preview, workflow, runs, stageExecutions, attempts, approvals, System.out);
     }
 
     OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
                     WorkflowRunRepository runs, StageExecutionRepository stageExecutions,
-                    ApprovalService approvals, PrintStream out) {
+                    StageAttemptRepository attempts, ApprovalService approvals, PrintStream out) {
         this.engine = engine;
         this.preview = preview;
         this.workflow = workflow;
         this.runs = runs;
         this.stageExecutions = stageExecutions;
+        this.attempts = attempts;
         this.approvals = approvals;
         this.out = out;
     }
@@ -89,7 +95,11 @@ public class OrchestratorCli implements ApplicationRunner {
 
     private void startRun(ApplicationArguments args) {
         ChangeType changeType = parseChangeType(option(args, "change-type", "brownfield"));
-        report(engine.run(option(args, "scenario", ""), changeType, option(args, "request", "")));
+        String chaos = option(args, "chaos", "");
+        if (!chaos.isBlank()) {
+            out.println("CHAOS MODE: injecting failures (" + chaos + ") to demonstrate recovery");
+        }
+        report(engine.run(option(args, "scenario", ""), changeType, option(args, "request", ""), chaos));
     }
 
     private void decide(ApplicationArguments args, boolean approve) {
@@ -111,10 +121,18 @@ public class OrchestratorCli implements ApplicationRunner {
 
     private void report(WorkflowRun run) {
         List<StageExecution> stages = stageExecutions.findByRunIdOrderByIdAsc(run.getId());
+        List<StageAttempt> tries = attempts.findByRunIdOrderByIdAsc(run.getId());
         out.printf("Run %s (%s, %s): %s%n", run.getId(), run.getScenario(),
                 run.getChangeType().name().toLowerCase(Locale.ROOT), run.getStatus());
         for (StageExecution stage : stages) {
-            out.printf("  %-18s %s%n", stage.getStageId(), stage.getStatus());
+            out.printf("  %-18s %s%s%n", stage.getStageId(), stage.getStatus(),
+                    stage.getAttempt() > 1 ? " (" + stage.getAttempt() + " attempts)" : "");
+            if (stage.getAttempt() > 1) {
+                tries.stream().filter(t -> t.getStageId().equals(stage.getStageId())).forEach(t ->
+                        out.printf("      attempt %d %-18s %s%n", t.getAttemptNumber(),
+                                t.getModel() == null ? "-" : t.getModel(),
+                                t.isSucceeded() ? "ok" : "failed: " + firstLine(t.getError())));
+            }
         }
         Path dir = Path.of("runs", run.getId());
         if (!artifacts.write(dir, stages).isEmpty()) {
@@ -131,6 +149,21 @@ public class OrchestratorCli implements ApplicationRunner {
         }
         stages.stream().filter(s -> s.getStatus() == StageStatus.FAILED || s.getStatus() == StageStatus.BLOCKED)
                 .forEach(s -> out.printf("  %s: %s%n", s.getStageId(), s.getError()));
+        if (run.getStatus() == RunStatus.SAFE_STOPPED) {
+            out.println("Safe-stopped: " + run.getStopReason());
+            if (run.getRollbackTarget() != null) {
+                out.printf("Rolled back %s to %s; the failed state is kept at tag %s%n", run.getBranch(),
+                        shortSha(run.getRollbackTarget()), run.getPreservedRef());
+            }
+        }
+    }
+
+    private static String firstLine(String text) {
+        return text == null ? "" : text.lines().findFirst().orElse("");
+    }
+
+    private static String shortSha(String sha) {
+        return sha.length() > 10 ? sha.substring(0, 10) : sha;
     }
 
     private void previewStage(ApplicationArguments args) {

@@ -9,6 +9,8 @@ import java.util.Map;
 /** Builds the model request for a stage: a per-stage system prompt plus the request and approved upstream outputs. */
 public class PromptBuilder {
 
+    static final int MAX_FEEDBACK_CHARS = 4000;
+
     private final AgentProperties properties;
 
     public PromptBuilder(AgentProperties properties) {
@@ -17,8 +19,8 @@ public class PromptBuilder {
 
     public AgentRequest build(StageContext context) {
         String stageId = context.stage().id();
-        return new AgentRequest(context.runId(), stageId, properties.modelFor(stageId),
-                loadTemplate(stageId), userPrompt(context));
+        String model = context.model() != null ? context.model() : properties.modelFor(stageId);
+        return new AgentRequest(context.runId(), stageId, model, loadTemplate(stageId), userPrompt(context));
     }
 
     static String userPrompt(StageContext context) {
@@ -28,6 +30,14 @@ public class PromptBuilder {
         for (Map.Entry<String, String> upstream : context.upstreamOutputs().entrySet()) {
             prompt.append("\n## Output of stage: ").append(upstream.getKey()).append("\n")
                     .append(upstream.getValue()).append("\n");
+        }
+        if (context.retryFeedback() != null) {
+            String feedback = context.retryFeedback();
+            if (feedback.length() > MAX_FEEDBACK_CHARS) {
+                feedback = feedback.substring(0, MAX_FEEDBACK_CHARS) + "\n[truncated]";
+            }
+            prompt.append("\n## Previous attempt failed\n").append(feedback)
+                    .append("\n\nCorrect this problem in your answer and follow the required format exactly.\n");
         }
         return prompt.toString();
     }

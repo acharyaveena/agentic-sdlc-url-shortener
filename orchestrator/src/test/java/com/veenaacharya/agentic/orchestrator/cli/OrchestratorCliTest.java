@@ -16,6 +16,8 @@ import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
+import com.veenaacharya.agentic.orchestrator.state.StageAttempt;
+import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.WorkflowRun;
@@ -41,10 +43,11 @@ class OrchestratorCliTest {
     private final AgentStageExecutor executor = mock(AgentStageExecutor.class);
     private final WorkflowRunRepository runs = mock(WorkflowRunRepository.class);
     private final StageExecutionRepository stageExecutions = mock(StageExecutionRepository.class);
+    private final StageAttemptRepository attempts = mock(StageAttemptRepository.class);
     private final ApprovalService approvals = mock(ApprovalService.class);
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private final OrchestratorCli cli = new OrchestratorCli(engine, executor,
-            new WorkflowLoader().loadFromClasspath("workflow.yml"), runs, stageExecutions, approvals,
+            new WorkflowLoader().loadFromClasspath("workflow.yml"), runs, stageExecutions, attempts, approvals,
             new PrintStream(buffer, true, StandardCharsets.UTF_8));
 
     @Test
@@ -87,7 +90,7 @@ class OrchestratorCliTest {
     void startsRunAndPrintsStageStatuses() {
         WorkflowRun run = new WorkflowRun("greenfield", ChangeType.GREENFIELD, "build it", NOW);
         run.finish(RunStatus.SUCCEEDED, NOW);
-        when(engine.run("greenfield", ChangeType.GREENFIELD, "build it")).thenReturn(run);
+        when(engine.run("greenfield", ChangeType.GREENFIELD, "build it", "")).thenReturn(run);
         StageExecution skipped = new StageExecution(run.getId(), "impact-analysis");
         skipped.skip(NOW);
         when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of(skipped));
@@ -104,7 +107,7 @@ class OrchestratorCliTest {
     void pausedRunTellsReviewerHowToApproveOrReject() {
         WorkflowRun run = new WorkflowRun("expiry", ChangeType.BROWNFIELD, "", NOW);
         run.markAwaitingApproval();
-        when(engine.run("expiry", ChangeType.BROWNFIELD, "")).thenReturn(run);
+        when(engine.run("expiry", ChangeType.BROWNFIELD, "", "")).thenReturn(run);
         StageExecution waiting = new StageExecution(run.getId(), "requirements");
         waiting.start(NOW);
         waiting.awaitApproval(null);
@@ -125,7 +128,7 @@ class OrchestratorCliTest {
     void failedStagesShowTheirError() {
         WorkflowRun run = new WorkflowRun("x", ChangeType.BROWNFIELD, "", NOW);
         run.finish(RunStatus.FAILED, NOW);
-        when(engine.run("x", ChangeType.BROWNFIELD, "")).thenReturn(run);
+        when(engine.run("x", ChangeType.BROWNFIELD, "", "")).thenReturn(run);
         StageExecution failed = new StageExecution(run.getId(), "code");
         failed.start(NOW);
         failed.fail("exit gate failed: missing required sections: [X]", NOW);
@@ -134,6 +137,67 @@ class OrchestratorCliTest {
         cli.run(new DefaultApplicationArguments("--scenario=x"));
 
         assertThat(output()).contains("  code: exit gate failed: missing required sections: [X]");
+    }
+
+    @Test
+    void chaosFlagIsAnnouncedAndPassedToTheEngine() {
+        WorkflowRun run = new WorkflowRun("demo", ChangeType.GREENFIELD, "", NOW);
+        when(engine.run("demo", ChangeType.GREENFIELD, "", "design:2")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--scenario=demo", "--change-type=greenfield", "--chaos=design:2"));
+
+        verify(engine).run("demo", ChangeType.GREENFIELD, "", "design:2");
+        assertThat(output()).startsWith("CHAOS MODE: injecting failures (design:2) to demonstrate recovery");
+    }
+
+    @Test
+    void stagesWithSeveralAttemptsListEachAttemptWithModelAndOutcome() {
+        WorkflowRun run = new WorkflowRun("demo", ChangeType.GREENFIELD, "", NOW);
+        when(engine.run("demo", ChangeType.GREENFIELD, "", "")).thenReturn(run);
+        StageExecution design = new StageExecution(run.getId(), "design");
+        design.start(NOW);
+        design.recordAttempts(3);
+        design.succeed("ok", NOW);
+        StageExecution code = new StageExecution(run.getId(), "code");
+        code.start(NOW);
+        code.succeed("ok", NOW);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of(design, code));
+        when(attempts.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of(
+                new StageAttempt(run.getId(), "design", 1, "claude-opus-5.5", false,
+                        "chaos: injected failure on attempt 1\nmore detail", NOW, NOW),
+                new StageAttempt(run.getId(), "design", 2, "claude-opus-5.5", false, "timed out", NOW, NOW),
+                new StageAttempt(run.getId(), "design", 3, "claude-sonnet-5.5", true, null, NOW, NOW),
+                new StageAttempt(run.getId(), "code", 1, "claude-sonnet-5.5", true, null, NOW, NOW)));
+
+        cli.run(new DefaultApplicationArguments("--scenario=demo", "--change-type=greenfield"));
+
+        assertThat(output())
+                .contains("design             SUCCEEDED (3 attempts)")
+                .contains("attempt 1 claude-opus-5.5    failed: chaos: injected failure on attempt 1" + System.lineSeparator())
+                .contains("attempt 2 claude-opus-5.5    failed: timed out")
+                .contains("attempt 3 claude-sonnet-5.5  ok")
+                .contains("code               SUCCEEDED" + System.lineSeparator())
+                .doesNotContain("more detail");
+    }
+
+    @Test
+    void safeStoppedRunShowsReasonRollbackTargetAndPreservedTag() {
+        WorkflowRun run = new WorkflowRun("demo", ChangeType.GREENFIELD, "", NOW);
+        run.assignBranch("agent/demo-12345678");
+        run.safeStop("stage build-test failed after 1 attempt(s): chaos", "0123456789abcdef0123",
+                "agent-failed/12345678", NOW);
+        when(engine.run("demo", ChangeType.GREENFIELD, "", "build-test:always")).thenReturn(run);
+        when(stageExecutions.findByRunIdOrderByIdAsc(run.getId())).thenReturn(List.of());
+
+        cli.run(new DefaultApplicationArguments("--scenario=demo", "--change-type=greenfield",
+                "--chaos=build-test:always"));
+
+        assertThat(output())
+                .contains(": SAFE_STOPPED")
+                .contains("Safe-stopped: stage build-test failed after 1 attempt(s): chaos")
+                .contains("Rolled back agent/demo-12345678 to 0123456789; the failed state is kept at tag "
+                        + "agent-failed/12345678");
     }
 
     @Test

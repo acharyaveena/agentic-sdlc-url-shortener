@@ -45,6 +45,20 @@ public class WorkflowRun {
     /** Git branch holding this run's commits; null when the run is not tied to a repository. */
     private String branch;
 
+    /** Commit the run branch started from; the rollback target when nothing was approved yet. */
+    private String baseCommit;
+
+    /** Failures to inject for demonstrations, e.g. {@code design:2,build-test:always}; null normally. */
+    private String chaos;
+
+    @Column(length = 2000)
+    private String stopReason;
+
+    private String rollbackTarget;
+
+    /** Git ref that keeps the failed state reachable after a rollback. */
+    private String preservedRef;
+
     protected WorkflowRun() {
     }
 
@@ -69,8 +83,48 @@ public class WorkflowRun {
         this.branch = branchName;
     }
 
+    public void assignBaseCommit(String commit) {
+        this.baseCommit = commit;
+    }
+
+    public void useChaos(String spec) {
+        this.chaos = spec == null || spec.isBlank() ? null : spec;
+    }
+
+    public void safeStop(String reason, String target, String preserved, Instant at) {
+        this.status = RunStatus.SAFE_STOPPED;
+        this.stopReason = reason != null && reason.length() > 2000 ? reason.substring(0, 2000) : reason;
+        this.rollbackTarget = target;
+        this.preservedRef = preserved;
+        this.finishedAt = at;
+    }
+
+    public boolean isFinished() {
+        return status == RunStatus.SUCCEEDED || status == RunStatus.FAILED || status == RunStatus.SAFE_STOPPED;
+    }
+
     public String getBranch() {
         return branch;
+    }
+
+    public String getBaseCommit() {
+        return baseCommit;
+    }
+
+    public String getChaos() {
+        return chaos;
+    }
+
+    public String getStopReason() {
+        return stopReason;
+    }
+
+    public String getRollbackTarget() {
+        return rollbackTarget;
+    }
+
+    public String getPreservedRef() {
+        return preservedRef;
     }
 
     public void finish(RunStatus finalStatus, Instant at) {

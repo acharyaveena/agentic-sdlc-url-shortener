@@ -70,6 +70,31 @@ class PromptBuilderTest {
     }
 
     @Test
+    void retryCarriesTheFailureReasonAndTheAttemptModelOverridesTheStageModel() {
+        StageContext retry = context("design", Map.of()).forAttempt("fallback-model", "exit gate failed: [Task plan]");
+
+        AgentRequest request = builder.build(retry);
+
+        assertThat(request.model()).isEqualTo("fallback-model");
+        assertThat(request.userPrompt()).endsWith("""
+
+                ## Previous attempt failed
+                exit gate failed: [Task plan]
+
+                Correct this problem in your answer and follow the required format exactly.
+                """);
+    }
+
+    @Test
+    void longFeedbackIsTruncated() {
+        String prompt = PromptBuilder.userPrompt(context("code", Map.of()).forAttempt(null, "x".repeat(10_000)));
+
+        assertThat(prompt).contains("x".repeat(PromptBuilder.MAX_FEEDBACK_CHARS) + "\n[truncated]")
+                .doesNotContain("x".repeat(PromptBuilder.MAX_FEEDBACK_CHARS + 1));
+        assertThat(builder.build(context("code", Map.of()).forAttempt(null, "y")).model()).isEqualTo("sonnet");
+    }
+
+    @Test
     void missingTemplateIsReported() {
         StageContext context = new StageContext("run-1", new StageDefinition("nope", List.of(), Set.of()),
                 ChangeType.GREENFIELD, "x", Map.of());

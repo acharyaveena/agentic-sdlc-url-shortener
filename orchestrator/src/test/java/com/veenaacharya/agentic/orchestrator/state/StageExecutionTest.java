@@ -129,6 +129,66 @@ class StageExecutionTest {
     }
 
     @Test
+    void recordsAttemptCountAndCommit() {
+        StageExecution execution = new StageExecution("run-1", "design");
+
+        execution.recordAttempts(3);
+        execution.recordCommit("abc123");
+
+        assertThat(execution.getAttempt()).isEqualTo(3);
+        assertThat(execution.getCommitSha()).isEqualTo("abc123");
+        assertThatThrownBy(() -> execution.recordAttempts(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("attempt count must be at least 1, was 0");
+    }
+
+    @Test
+    void safeStopRecordsReasonRollbackAndFinishesTheRun() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "r", T0);
+        run.assignBaseCommit("base");
+        run.useChaos("design:2");
+        assertThat(run.isFinished()).isFalse();
+
+        run.safeStop("x".repeat(3000), "target", "agent-failed/1", T1);
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
+        assertThat(run.isFinished()).isTrue();
+        assertThat(run.getStopReason()).hasSize(2000);
+        assertThat(run.getRollbackTarget()).isEqualTo("target");
+        assertThat(run.getPreservedRef()).isEqualTo("agent-failed/1");
+        assertThat(run.getFinishedAt()).isEqualTo(T1);
+        assertThat(run.getBaseCommit()).isEqualTo("base");
+        assertThat(run.getChaos()).isEqualTo("design:2");
+    }
+
+    @Test
+    void blankChaosIsStoredAsNoneAndOnlyTerminalStatusesAreFinished() {
+        WorkflowRun run = new WorkflowRun("s", ChangeType.GREENFIELD, "r", T0);
+        run.useChaos(" ");
+        run.markAwaitingApproval();
+
+        assertThat(run.getChaos()).isNull();
+        assertThat(run.isFinished()).isFalse();
+        run.finish(RunStatus.FAILED, T1);
+        assertThat(run.isFinished()).isTrue();
+    }
+
+    @Test
+    void attemptKeepsItsDetailsAndTruncatesLongErrors() {
+        StageAttempt attempt = new StageAttempt("run-1", "design", 2, "claude-opus-5.5", false,
+                "e".repeat(5000), T0, T1);
+
+        assertThat(attempt.getRunId()).isEqualTo("run-1");
+        assertThat(attempt.getStageId()).isEqualTo("design");
+        assertThat(attempt.getAttemptNumber()).isEqualTo(2);
+        assertThat(attempt.getModel()).isEqualTo("claude-opus-5.5");
+        assertThat(attempt.isSucceeded()).isFalse();
+        assertThat(attempt.getError()).hasSize(StageAttempt.MAX_ERROR_LENGTH);
+        assertThat(attempt.getStartedAt()).isEqualTo(T0);
+        assertThat(attempt.getFinishedAt()).isEqualTo(T1);
+    }
+
+    @Test
     void workflowRunStartsPendingAndRecordsFinish() {
         WorkflowRun run = new WorkflowRun("greenfield", ChangeType.GREENFIELD, "build it", T0);
 
