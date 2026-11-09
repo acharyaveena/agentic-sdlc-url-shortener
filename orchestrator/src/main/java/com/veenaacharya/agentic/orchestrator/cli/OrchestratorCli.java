@@ -5,6 +5,7 @@ import com.veenaacharya.agentic.orchestrator.audit.AuditLog;
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
+import com.veenaacharya.agentic.orchestrator.evidence.EvidenceExporter;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.metrics.MetricsService;
 import com.veenaacharya.agentic.orchestrator.replan.ReplanService;
@@ -50,6 +51,7 @@ public class OrchestratorCli implements ApplicationRunner {
             "  --status=<run>                                                                show stages and approvals",
             "  --lineage=<run>                                                               show output hashes per revision",
             "  --metrics[=<run>]                                                             reliability metrics",
+            "  --export=<run> --to=scenarios/<name>                                          copy scenario evidence (scanned first)",
             "  --stage=<id> --request=<text>                                                 preview one stage");
 
     static final String DEFAULT_ACTOR = "reviewer";
@@ -67,16 +69,17 @@ public class OrchestratorCli implements ApplicationRunner {
 
     /** Services for re-planning and reporting, grouped to keep the constructor readable. */
     public record Collaborators(ReplanService replans, MetricsService metrics, DecisionRepository decisions,
-                                AuditLog audit) {
+                                AuditLog audit, EvidenceExporter exporter) {
     }
 
     @Autowired
     public OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
                            WorkflowRunRepository runs, StageExecutionRepository stageExecutions,
                            StageAttemptRepository attempts, ApprovalService approvals, ReplanService replans,
-                           MetricsService metrics, DecisionRepository decisions, AuditLog audit) {
+                           MetricsService metrics, DecisionRepository decisions, AuditLog audit,
+                           EvidenceExporter exporter) {
         this(engine, preview, workflow, runs, stageExecutions, attempts, approvals,
-                new Collaborators(replans, metrics, decisions, audit), System.out);
+                new Collaborators(replans, metrics, decisions, audit, exporter), System.out);
     }
 
     OrchestratorCli(WorkflowEngine engine, AgentStageExecutor preview, WorkflowDefinition workflow,
@@ -111,6 +114,8 @@ public class OrchestratorCli implements ApplicationRunner {
         } else if (args.containsOption("status")) {
             report(runs.findById(option(args, "status", ""))
                     .orElseThrow(() -> new IllegalArgumentException("unknown run: " + option(args, "status", ""))));
+        } else if (args.containsOption("export")) {
+            export(args);
         } else if (args.containsOption("lineage")) {
             lineage(option(args, "lineage", ""));
         } else if (args.containsOption("metrics")) {
@@ -160,6 +165,17 @@ public class OrchestratorCli implements ApplicationRunner {
         }
         out.printf("Re-planning %s%n", target[1]);
         report(more.replans().replan(target[0], target[1], option(args, "actor", DEFAULT_ACTOR), reason));
+    }
+
+    private void export(ApplicationArguments args) {
+        String runId = option(args, "export", "");
+        String to = option(args, "to", "");
+        if (to.isBlank()) {
+            throw new IllegalArgumentException("--export needs --to=scenarios/<name>");
+        }
+        List<String> files = more.exporter().export(runId, Path.of(to));
+        out.printf("Exported %d evidence files to %s%n", files.size(), to);
+        files.forEach(f -> out.println("  " + f));
     }
 
     private void lineage(String runId) {

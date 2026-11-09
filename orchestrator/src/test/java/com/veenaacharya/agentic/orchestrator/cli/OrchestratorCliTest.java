@@ -14,6 +14,8 @@ import com.veenaacharya.agentic.orchestrator.audit.AuditLog;
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
 import com.veenaacharya.agentic.orchestrator.engine.StageResult;
 import com.veenaacharya.agentic.orchestrator.engine.WorkflowEngine;
+import com.veenaacharya.agentic.orchestrator.evidence.EvidenceExporter;
+import com.veenaacharya.agentic.orchestrator.evidence.EvidenceRejectedException;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.metrics.MetricsReport;
 import com.veenaacharya.agentic.orchestrator.metrics.MetricsService;
@@ -56,6 +58,7 @@ class OrchestratorCliTest {
     private final ReplanService replans = mock(ReplanService.class);
     private final MetricsService metrics = mock(MetricsService.class);
     private final DecisionRepository decisions = mock(DecisionRepository.class);
+    private final EvidenceExporter exporter = mock(EvidenceExporter.class);
     private final AuditLog audit = new AuditLog() {
         @Override
         public void record(com.veenaacharya.agentic.orchestrator.audit.AuditEvent event) {
@@ -69,8 +72,36 @@ class OrchestratorCliTest {
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     private final OrchestratorCli cli = new OrchestratorCli(engine, executor,
             new WorkflowLoader().loadFromClasspath("workflow.yml"), runs, stageExecutions, attempts, approvals,
-            new OrchestratorCli.Collaborators(replans, metrics, decisions, audit),
+            new OrchestratorCli.Collaborators(replans, metrics, decisions, audit, exporter),
             new PrintStream(buffer, true, StandardCharsets.UTF_8));
+
+    @Test
+    void exportCopiesEvidenceAndListsTheFiles() {
+        when(exporter.export("run-1", Path.of("scenarios/greenfield")))
+                .thenReturn(List.of("request.md", "run.md"));
+
+        cli.run(new DefaultApplicationArguments("--export=run-1", "--to=scenarios/greenfield"));
+
+        assertThat(output()).isEqualTo("Exported 2 evidence files to scenarios/greenfield" + System.lineSeparator()
+                + "  request.md" + System.lineSeparator() + "  run.md" + System.lineSeparator());
+    }
+
+    @Test
+    void exportNeedsATargetFolder() {
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--export=run-1")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("--export needs --to=scenarios/<name>");
+        verifyNoInteractions(exporter);
+    }
+
+    @Test
+    void exportProblemsAreReportedNotSwallowed() {
+        when(exporter.export(any(), any())).thenThrow(new EvidenceRejectedException(List.of("run.md: email address on line 3")));
+
+        assertThatThrownBy(() -> cli.run(new DefaultApplicationArguments("--export=run-1", "--to=scenarios/x")))
+                .isInstanceOf(EvidenceRejectedException.class)
+                .hasMessageContaining("run.md: email address on line 3");
+    }
 
     @Test
     void replanCommandRedoesTheStageWithTheReasonAndReportsTheRun() {
