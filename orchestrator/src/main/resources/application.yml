@@ -16,7 +16,7 @@ orchestrator:
     # mock needs no login; switch with --orchestrator.agent.mode=copilot
     mode: mock
     default-model: claude-sonnet-5.5
-    timeout-seconds: 300
+    timeout-seconds: 600
     models:
       requirements: claude-opus-5.5
       impact-analysis: claude-opus-5.5
