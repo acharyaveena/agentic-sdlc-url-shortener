@@ -27,13 +27,13 @@ public class LinkController {
 
     @PostMapping
     public ResponseEntity<LinkResponse> create(@Valid @RequestBody CreateLinkRequest request) {
-        Link link = service.create(request.url());
+        Link link = service.create(request.url(), request.ttlSeconds());
         String base = properties.getBaseUrl();
         if (base.endsWith("/")) {
             base = base.substring(0, base.length() - 1);
         }
         String shortUrl = base + "/" + link.shortCode();
-        LinkResponse body = new LinkResponse(link.shortCode(), shortUrl, link.longUrl(), link.createdAt());
+        LinkResponse body = new LinkResponse(link.shortCode(), shortUrl, link.longUrl(), link.createdAt(), link.expiresAt());
         return ResponseEntity.created(URI.create(shortUrl)).body(body);
     }
 

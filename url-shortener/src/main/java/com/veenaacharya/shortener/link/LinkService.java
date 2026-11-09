@@ -28,11 +28,15 @@ public class LinkService {
     }
 
     // Not transactional: each insert must commit or fail on its own so a collision can be retried.
-    public Link create(String rawUrl) {
+    public Link create(String rawUrl, Long ttlSeconds) {
         String url = validator.validate(rawUrl);
+        Instant now = Instant.now(clock);
+        Instant expiresAt = ttlSeconds != null
+                ? now.plusSeconds(ttlSeconds)
+                : now.plus(properties.getLink().getDefaultTtl());
         int attempts = properties.getMaxCodeAttempts();
         for (int i = 0; i < attempts; i++) {
-            Link candidate = new Link(null, generator.next(), url, 0L, Instant.now(clock));
+            Link candidate = new Link(null, generator.next(), url, 0L, now, expiresAt);
             try {
                 return repository.save(candidate);
             } catch (RuntimeException e) {
@@ -46,12 +50,14 @@ public class LinkService {
 
     @Transactional
     public String resolve(String code) {
+        Link link = repository.findByShortCode(code).orElseThrow(() -> new LinkNotFoundException(code));
+        if (link.isExpired(Instant.now(clock))) {
+            throw new LinkExpiredException(code);
+        }
         if (repository.incrementClickCount(code) == 0) {
             throw new LinkNotFoundException(code);
         }
-        return repository.findByShortCode(code)
-                .orElseThrow(() -> new LinkNotFoundException(code))
-                .longUrl();
+        return link.longUrl();
     }
 
     @Transactional(readOnly = true)

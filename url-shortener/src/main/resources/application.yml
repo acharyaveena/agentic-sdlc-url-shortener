@@ -22,3 +22,7 @@ app:
   rate-limit:
     requests: 10
     window: PT1M
+  link:
+    default-ttl: P30D
+    cleanup-interval: PT1H
+    cleanup-grace: P7D

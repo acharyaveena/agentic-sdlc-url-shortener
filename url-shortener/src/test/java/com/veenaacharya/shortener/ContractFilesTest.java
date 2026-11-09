@@ -38,7 +38,7 @@ class ContractFilesTest {
         assertThat(responses(paths, "/api/v1/links/{code}/stats", "get").keySet().stream().map(String::valueOf))
                 .contains("200", "404");
         assertThat(responses(paths, "/{code}", "get").keySet().stream().map(String::valueOf))
-                .contains("302", "404");
+                .contains("302", "404", "410");
     }
 
     @Test

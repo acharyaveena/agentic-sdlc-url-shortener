@@ -59,7 +59,7 @@ class LinkServiceTest {
                 .thenThrow(new DuplicateKeyException("dup"))
                 .thenAnswer(inv -> inv.getArgument(0));
 
-        Link result = service.create("https://example.com/page");
+        Link result = service.create("https://example.com/page", null);
 
         assertThat(result.shortCode()).isEqualTo("new");
         assertThat(result.longUrl()).isEqualTo("https://example.com/page");
@@ -73,7 +73,7 @@ class LinkServiceTest {
         when(generator.next()).thenReturn("dup");
         when(repository.save(any(Link.class))).thenThrow(new DuplicateKeyException("dup"));
 
-        assertThatThrownBy(() -> service.create("https://example.com/page"))
+        assertThatThrownBy(() -> service.create("https://example.com/page", null))
                 .isInstanceOf(CodeGenerationExhaustedException.class);
 
         verify(repository, times(5)).save(any(Link.class));
@@ -81,7 +81,7 @@ class LinkServiceTest {
 
     @Test
     void invalidUrlIsRejectedBeforeAnyCodeIsGeneratedOrSaved() {
-        assertThatThrownBy(() -> service.create("ftp://example.com/x")).isInstanceOf(InvalidUrlException.class);
+        assertThatThrownBy(() -> service.create("ftp://example.com/x", null)).isInstanceOf(InvalidUrlException.class);
 
         verify(generator, never()).next();
         verify(repository, never()).save(any(Link.class));
@@ -120,5 +120,44 @@ class LinkServiceTest {
         when(repository.findByShortCode("nope")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.stats("nope")).isInstanceOf(LinkNotFoundException.class);
+    }
+
+    @Test
+    void createUsesExplicitTtlWhenProvided() {
+        when(generator.next()).thenReturn("abc1234");
+        when(repository.save(any(Link.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Link result = service.create("https://example.com/page", 120L);
+
+        assertThat(result.expiresAt()).isEqualTo(NOW.plusSeconds(120));
+    }
+
+    @Test
+    void createFallsBackToDefaultTtlWhenNoneProvided() {
+        when(generator.next()).thenReturn("abc1234");
+        when(repository.save(any(Link.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Link result = service.create("https://example.com/page", null);
+
+        assertThat(result.expiresAt()).isEqualTo(NOW.plus(properties.getLink().getDefaultTtl()));
+    }
+
+    @Test
+    void resolveThrowsExpiredWithoutIncrementingClickCount() {
+        Link expired = new Link(1L, "abc1234", "https://example.com/a", 1L, NOW.minusSeconds(100), NOW.minusSeconds(1));
+        when(repository.findByShortCode("abc1234")).thenReturn(Optional.of(expired));
+
+        assertThatThrownBy(() -> service.resolve("abc1234")).isInstanceOf(LinkExpiredException.class);
+
+        verify(repository, never()).incrementClickCount(any());
+    }
+
+    @Test
+    void resolveSucceedsAtTheExactExpiryInstant() {
+        Link expiringNow = new Link(1L, "abc1234", "https://example.com/a", 1L, NOW.minusSeconds(100), NOW);
+        when(repository.findByShortCode("abc1234")).thenReturn(Optional.of(expiringNow));
+        when(repository.incrementClickCount("abc1234")).thenReturn(1);
+
+        assertThat(service.resolve("abc1234")).isEqualTo("https://example.com/a");
     }
 }

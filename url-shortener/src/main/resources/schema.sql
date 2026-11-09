@@ -7,3 +7,6 @@ CREATE TABLE IF NOT EXISTS links (
     CONSTRAINT uk_links_short_code UNIQUE (short_code),
     CONSTRAINT ck_links_click_count_non_negative CHECK (click_count >= 0)
 );
+
+ALTER TABLE links ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+CREATE INDEX IF NOT EXISTS idx_links_expires_at ON links(expires_at);

@@ -74,6 +74,12 @@ paths:
               schema: { type: string, format: uri }
         '404':
           $ref: '#/components/responses/NotFound'
+        '410':
+          description: Link has expired
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
 components:
   parameters:
     Code:
@@ -93,14 +99,21 @@ components:
           maxLength: 2048
           description: Absolute http or https URL that does not point back to this service
           example: https://example.com/page
+        ttlSeconds:
+          type: integer
+          format: int64
+          minimum: 60
+          maximum: 31536000
+          description: Optional time-to-live override in seconds; defaults to app.link.default-ttl
     LinkResponse:
       type: object
-      required: [code, shortUrl, longUrl, createdAt]
+      required: [code, shortUrl, longUrl, createdAt, expiresAt]
       properties:
         code:      { type: string, pattern: '^[0-9A-Za-z]{7}$', example: aZ3k9Qp }
         shortUrl:  { type: string, format: uri, example: http://localhost:8080/aZ3k9Qp }
         longUrl:   { type: string, format: uri }
         createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
     LinkStats:
       type: object
       required: [code, longUrl, clickCount, createdAt]
