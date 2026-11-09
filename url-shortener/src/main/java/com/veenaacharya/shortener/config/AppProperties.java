@@ -14,6 +14,7 @@ public class AppProperties {
     private int codeLength = 7;
     private int maxCodeAttempts = 5;
     private RateLimit rateLimit = new RateLimit();
+    private Link link = new Link();
 
     public String getBaseUrl() {
         return baseUrl;
@@ -63,6 +64,14 @@ public class AppProperties {
         this.rateLimit = rateLimit;
     }
 
+    public Link getLink() {
+        return link;
+    }
+
+    public void setLink(Link link) {
+        this.link = link;
+    }
+
     public static class RateLimit {
 
         private int requests = 10;
@@ -82,6 +91,37 @@ public class AppProperties {
 
         public void setWindow(Duration window) {
             this.window = window;
+        }
+    }
+
+    public static class Link {
+
+        private Duration defaultTtl = Duration.parse("P30D");
+        private Duration cleanupInterval = Duration.parse("PT1H");
+        private Duration cleanupGrace = Duration.parse("P7D");
+
+        public Duration getDefaultTtl() {
+            return defaultTtl;
+        }
+
+        public void setDefaultTtl(Duration defaultTtl) {
+            this.defaultTtl = defaultTtl;
+        }
+
+        public Duration getCleanupInterval() {
+            return cleanupInterval;
+        }
+
+        public void setCleanupInterval(Duration cleanupInterval) {
+            this.cleanupInterval = cleanupInterval;
+        }
+
+        public Duration getCleanupGrace() {
+            return cleanupGrace;
+        }
+
+        public void setCleanupGrace(Duration cleanupGrace) {
+            this.cleanupGrace = cleanupGrace;
         }
     }
 }

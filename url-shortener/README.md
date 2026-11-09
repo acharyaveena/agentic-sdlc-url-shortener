@@ -5,6 +5,11 @@ from a natural-language request; the generated code failed its first automated b
 mismatch between the code and tests stages), was recovered from the orchestrator's preserved failed-state
 tag, and fixed by a human reviewer. See `scenarios/greenfield/` for the full run evidence.
 
+Link expiry (TTL, 410 Gone, scheduled cleanup) was added afterwards as a brownfield change request. That
+run's code and tests stages produced structurally broken output (wrong package, dropped dependencies and
+constraints in files they rewrote), so the feature was integrated by hand into the real files instead. See
+`scenarios/brownfield/` for the full run evidence and `scenarios/brownfield/walkthrough.md` for why.
+
 ## Run it
 
 ```bash
@@ -25,17 +30,19 @@ The full contract is in [`src/main/resources/openapi.yaml`](src/main/resources/o
 
 ### Create a link
 
+`ttlSeconds` is optional (60 to 31536000); it defaults to `app.link.default-ttl` when omitted.
+
 ```bash
 curl -i -X POST http://localhost:8080/api/v1/links \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/some/page"}'
+  -d '{"url":"https://example.com/some/page","ttlSeconds":3600}'
 ```
 
 ```http
 HTTP/1.1 201 Created
 Location: http://localhost:8080/aB3xQ9z
 
-{"code":"aB3xQ9z","shortUrl":"http://localhost:8080/aB3xQ9z","longUrl":"https://example.com/some/page","createdAt":"2026-01-01T00:00:00Z"}
+{"code":"aB3xQ9z","shortUrl":"http://localhost:8080/aB3xQ9z","longUrl":"https://example.com/some/page","createdAt":"2026-01-01T00:00:00Z","expiresAt":"2026-01-01T01:00:00Z"}
 ```
 
 ### Visit a short link
@@ -44,7 +51,9 @@ Location: http://localhost:8080/aB3xQ9z
 curl -i http://localhost:8080/aB3xQ9z
 ```
 
-Returns `302 Found` with a `Location` header, and increments that link's click count by one.
+Returns `302 Found` with a `Location` header, and increments that link's click count by one. Once the link
+has passed its `expiresAt`, the same request returns `410 Gone` instead, and the click is not counted.
+Links created before this feature existed (or with no TTL ever set) have `expiresAt: null` and never expire.
 
 ### Read stats
 
@@ -66,8 +75,9 @@ All errors are `application/problem+json` (RFC 7807), for example:
 
 | Status | When |
 |---|---|
-| 400 | Malformed or blocked URL (blocked schemes, length, self-reference, invalid JSON) |
+| 400 | Malformed or blocked URL (blocked schemes, length, self-reference, invalid JSON), or `ttlSeconds` out of range |
 | 404 | Unknown short code |
+| 410 | Link has passed its `expiresAt` |
 | 429 | Rate limit exceeded (`Retry-After` header included) |
 | 503 | No unique short code found after `app.max-code-attempts` tries |
 
@@ -84,8 +94,13 @@ All settings are under the `app.*` prefix in [`src/main/resources/application.ym
 | `app.max-code-attempts` | 5 | Collision retries before returning 503 |
 | `app.rate-limit.requests` | 10 | Link creations allowed per client per window |
 | `app.rate-limit.window` | `PT1M` | Rate-limit window (ISO-8601 duration) |
+| `app.link.default-ttl` | `P30D` | Time-to-live applied when a create request omits `ttlSeconds` |
+| `app.link.cleanup-interval` | `PT1H` | How often the expired-link cleanup job runs |
+| `app.link.cleanup-grace` | `P7D` | How long an expired link is kept (for stats/audit) before cleanup deletes it |
 
-Rate limiting applies only to `POST /api/v1/links`, by remote address (no proxy headers are trusted).
+Rate limiting applies only to `POST /api/v1/links`, by remote address (no proxy headers are trusted). The
+cleanup job only deletes rows whose `expires_at` is non-null and older than the grace period; links with
+no expiry are never touched.
 
 ## Known limitations
 
@@ -101,5 +116,5 @@ Rate limiting applies only to `POST /api/v1/links`, by remote address (no proxy 
 ./mvnw -pl url-shortener verify
 ```
 
-82 tests (unit and integration) pass, including concurrent-redirect and rate-limit integration tests
-against a real (in-memory) H2 database.
+94 tests (unit and integration) pass, including concurrent-redirect, rate-limit and link-expiry
+integration tests against a real (in-memory) H2 database with a fixed clock.

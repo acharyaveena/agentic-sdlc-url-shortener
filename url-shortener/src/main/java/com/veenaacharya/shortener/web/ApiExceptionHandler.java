@@ -1,6 +1,7 @@
 package com.veenaacharya.shortener.web;
 
 import com.veenaacharya.shortener.link.CodeGenerationExhaustedException;
+import com.veenaacharya.shortener.link.LinkExpiredException;
 import com.veenaacharya.shortener.link.LinkNotFoundException;
 import com.veenaacharya.shortener.ratelimit.RateLimitExceededException;
 import com.veenaacharya.shortener.validation.InvalidUrlException;
@@ -24,6 +25,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(LinkNotFoundException.class)
     public ResponseEntity<ProblemDetail> handleNotFound(LinkNotFoundException e) {
         return problem(HttpStatus.NOT_FOUND, "Link not found", e.getMessage(), null);
+    }
+
+    @ExceptionHandler(LinkExpiredException.class)
+    public ResponseEntity<ProblemDetail> handleExpired(LinkExpiredException e) {
+        return problem(HttpStatus.GONE, "Link expired", e.getMessage(), null);
     }
 
     @ExceptionHandler(RateLimitExceededException.class)
