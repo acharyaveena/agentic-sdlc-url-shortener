@@ -9,5 +9,7 @@ public enum StageStatus {
     FAILED,
     SKIPPED,
     /** Not run because an upstream stage failed or was blocked. */
-    BLOCKED
+    BLOCKED,
+    /** Built from an upstream output that has since changed; runs again, with its gates and approvals. */
+    STALE
 }

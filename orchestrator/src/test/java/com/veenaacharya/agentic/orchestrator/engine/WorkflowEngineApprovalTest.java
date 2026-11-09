@@ -6,15 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
 import com.veenaacharya.agentic.orchestrator.agent.AgentStageExecutor;
 import com.veenaacharya.agentic.orchestrator.agent.MockAgentRuntime;
-import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
-import com.veenaacharya.agentic.orchestrator.gate.StageGates;
-import com.veenaacharya.agentic.orchestrator.recovery.RecoveryProperties;
-import com.veenaacharya.agentic.orchestrator.recovery.RetryingStageRunner;
-import com.veenaacharya.agentic.orchestrator.recovery.RollbackStrategy;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalStatus;
+import com.veenaacharya.agentic.orchestrator.state.DecisionRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
@@ -23,11 +19,7 @@ import com.veenaacharya.agentic.orchestrator.state.StageStatus;
 import com.veenaacharya.agentic.orchestrator.state.WorkflowRun;
 import com.veenaacharya.agentic.orchestrator.state.WorkflowRunRepository;
 import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
-import com.veenaacharya.agentic.orchestrator.workflow.WorkflowDefinition;
-import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -38,7 +30,6 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 class WorkflowEngineApprovalTest {
 
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
-    private static final WorkflowDefinition WORKFLOW = new WorkflowLoader().loadFromClasspath("workflow.yml");
     private static final AgentProperties AGENT = new AgentProperties("mock", null, null, 0);
 
     @Autowired
@@ -53,6 +44,9 @@ class WorkflowEngineApprovalTest {
     @Autowired
     private StageAttemptRepository attempts;
 
+    @Autowired
+    private DecisionRepository decisions;
+
     private final MockAgentRuntime runtime = new MockAgentRuntime();
 
     @Test
@@ -64,7 +58,8 @@ class WorkflowEngineApprovalTest {
                 .containsEntry("impact-analysis", StageStatus.PENDING)
                 .containsEntry("design", StageStatus.PENDING);
         assertThat(runtime.requests()).extracting(r -> r.stageId()).containsExactly("requirements");
-        Approval approval = approvalRepository.findByRunIdAndStageId(run.getId(), "requirements").orElseThrow();
+        Approval approval = approvalRepository.findFirstByRunIdAndStageIdOrderByIdDesc(run.getId(), "requirements")
+                .orElseThrow();
         assertThat(approval.getKind()).isEqualTo("requirements-signoff");
         assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
     }
@@ -139,7 +134,8 @@ class WorkflowEngineApprovalTest {
         assertThat(design.getError()).isEqualTo("rejected by alice: scope too broad");
         assertThat(statuses(run)).containsEntry("code", StageStatus.BLOCKED)
                 .containsEntry("release-readiness", StageStatus.BLOCKED);
-        assertThat(approvalRepository.findByRunIdAndStageId(run.getId(), "design").orElseThrow().getReason())
+        assertThat(approvalRepository.findFirstByRunIdAndStageIdOrderByIdDesc(run.getId(), "design").orElseThrow()
+                .getReason())
                 .isEqualTo("scope too broad");
     }
 
@@ -208,18 +204,16 @@ class WorkflowEngineApprovalTest {
     }
 
     private ApprovalService approvals(boolean autoApprove) {
-        return new ApprovalService(approvalRepository, stageExecutions, Clock.fixed(NOW, ZoneOffset.UTC),
-                new ApprovalProperties(autoApprove), AGENT);
+        return fixture(autoApprove).approvals();
     }
 
     private WorkflowEngine engine(boolean autoApprove) {
-        ApprovalService approvals = approvals(autoApprove);
-        StageGates gates = new StageGates(WORKFLOW, approvals);
-        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        RetryingStageRunner runner = new RetryingStageRunner(executor(), gates, AGENT,
-                new RecoveryProperties(1, Map.of()), clock);
-        return new WorkflowEngine(WORKFLOW, runner, gates, approvals, RunWorkspace.NONE, RollbackStrategy.NONE,
-                runs, stageExecutions, attempts, clock);
+        return fixture(autoApprove).engine();
+    }
+
+    private EngineFixture fixture(boolean autoApprove) {
+        return new EngineFixture(runs, stageExecutions, attempts, approvalRepository, decisions)
+                .executor(executor()).agent(AGENT).autoApprove(autoApprove);
     }
 
     /** Model-backed stages use the mock agent; build and policy-scan stages are stood in for. */

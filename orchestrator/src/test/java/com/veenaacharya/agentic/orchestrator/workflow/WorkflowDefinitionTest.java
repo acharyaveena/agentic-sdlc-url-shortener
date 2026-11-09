@@ -18,6 +18,14 @@ class WorkflowDefinitionTest {
     }
 
     @Test
+    void descendantsIncludeTransitiveDependents() {
+        assertThat(workflow.descendantsOf("design"))
+                .containsExactly("code", "tests", "build-test", "docs", "policy-scan", "release-readiness");
+        assertThat(workflow.descendantsOf("release-readiness")).isEmpty();
+        assertThatThrownBy(() -> workflow.descendantsOf("deploy")).hasMessage("unknown stage: deploy");
+    }
+
+    @Test
     void ancestorsOfRootAreEmpty() {
         assertThat(workflow.ancestorsOf("requirements")).isEmpty();
     }

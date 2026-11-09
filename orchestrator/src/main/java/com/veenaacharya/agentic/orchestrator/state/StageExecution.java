@@ -1,5 +1,6 @@
 package com.veenaacharya.agentic.orchestrator.state;
 
+import com.veenaacharya.agentic.orchestrator.audit.Hashes;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -10,6 +11,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.stream.Collectors;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -52,6 +57,23 @@ public class StageExecution {
     /** Commit that recorded this stage's result; null until committed. */
     private String commitSha;
 
+    /** Starts at 1 and goes up each time the stage is re-planned or goes stale and must run again. */
+    @Column(nullable = false)
+    private int revision;
+
+    /** Hash of everything the stage was given: request, upstream outputs and any reviewer feedback. */
+    private String inputHash;
+
+    /** Output hash of each upstream stage this revision consumed, as {@code stage=hash;stage=hash}. */
+    @Column(length = 2000)
+    private String upstreamHashes;
+
+    private String outputHash;
+
+    /** Why the stage is being re-planned; handed to the model on the next run of the stage. */
+    @Column(length = MAX_ERROR_LENGTH)
+    private String replanFeedback;
+
     protected StageExecution() {
     }
 
@@ -59,26 +81,46 @@ public class StageExecution {
         this.runId = runId;
         this.stageId = stageId;
         this.attempt = 1;
+        this.revision = 1;
         this.status = StageStatus.PENDING;
     }
 
+    public void recordInputs(String hash, Map<String, String> upstream) {
+        inputHash = hash;
+        upstreamHashes = upstream.entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .collect(Collectors.joining(";"));
+    }
+
+    /** Output hash of each upstream stage this revision was built from. */
+    public Map<String, String> consumedUpstream() {
+        Map<String, String> consumed = new LinkedHashMap<>();
+        if (upstreamHashes != null && !upstreamHashes.isEmpty()) {
+            Arrays.stream(upstreamHashes.split(";")).map(e -> e.split("=", 2))
+                    .forEach(e -> consumed.put(e[0], e[1]));
+        }
+        return consumed;
+    }
+
     public void start(Instant at) {
-        requireStatus(StageStatus.PENDING);
+        requireStatus(StageStatus.PENDING, StageStatus.STALE);
         status = StageStatus.RUNNING;
         startedAt = at;
+        finishedAt = null;
+        error = null;
     }
 
     public void succeed(String stageOutput, Instant at) {
         requireStatus(StageStatus.RUNNING);
         status = StageStatus.SUCCEEDED;
-        output = stageOutput;
+        setOutput(stageOutput);
         finishedAt = at;
     }
 
     public void awaitApproval(String stageOutput) {
         requireStatus(StageStatus.RUNNING);
         status = StageStatus.AWAITING_APPROVAL;
-        output = stageOutput;
+        setOutput(stageOutput);
     }
 
     public void approve(Instant at) {
@@ -102,15 +144,42 @@ public class StageExecution {
     }
 
     public void skip(Instant at) {
-        requireStatus(StageStatus.PENDING);
+        requireStatus(StageStatus.PENDING, StageStatus.STALE);
         status = StageStatus.SKIPPED;
         finishedAt = at;
     }
 
     public void block(String reason) {
-        requireStatus(StageStatus.PENDING);
+        requireStatus(StageStatus.PENDING, StageStatus.STALE);
         status = StageStatus.BLOCKED;
         error = truncate(reason);
+    }
+
+    /** An upstream output this stage was built from has changed, so the stage must run again. */
+    public void markStale(String reason) {
+        requireStatus(StageStatus.SUCCEEDED, StageStatus.AWAITING_APPROVAL);
+        status = StageStatus.STALE;
+        error = truncate(reason);
+        replanFeedback = null;
+        revision++;
+    }
+
+    /** A human asked for this stage to be redone; the feedback goes to the model on the next run. */
+    public void replan(String feedback) {
+        requireStatus(StageStatus.SUCCEEDED, StageStatus.AWAITING_APPROVAL, StageStatus.FAILED);
+        status = StageStatus.PENDING;
+        replanFeedback = truncate(feedback);
+        error = null;
+        startedAt = null;
+        finishedAt = null;
+        revision++;
+    }
+
+    /** Lets a stage that was blocked by an upstream failure run again once that upstream is re-planned. */
+    public void reopen() {
+        requireStatus(StageStatus.BLOCKED);
+        status = StageStatus.PENDING;
+        error = null;
     }
 
     /** True when downstream stages may proceed. */
@@ -139,10 +208,16 @@ public class StageExecution {
         return commitSha;
     }
 
-    private void requireStatus(StageStatus expected) {
-        if (status != expected) {
-            throw new IllegalStateException(
-                    "stage " + stageId + " must be " + expected + " but is " + status);
+    private void setOutput(String stageOutput) {
+        output = stageOutput;
+        outputHash = Hashes.sha256(stageOutput);
+    }
+
+    private void requireStatus(StageStatus... allowed) {
+        if (Arrays.stream(allowed).noneMatch(s -> s == status)) {
+            throw new IllegalStateException("stage " + stageId + " must be "
+                    + Arrays.stream(allowed).map(Enum::name).collect(Collectors.joining(" or "))
+                    + " but is " + status);
         }
     }
 
@@ -187,5 +262,25 @@ public class StageExecution {
 
     public String getError() {
         return error;
+    }
+
+    public int getRevision() {
+        return revision;
+    }
+
+    public String getInputHash() {
+        return inputHash;
+    }
+
+    public String getOutputHash() {
+        return outputHash;
+    }
+
+    public String getReplanFeedback() {
+        return replanFeedback;
+    }
+
+    String upstreamHashesText() {
+        return upstreamHashes;
     }
 }

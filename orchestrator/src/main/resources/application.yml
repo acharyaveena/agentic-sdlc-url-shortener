@@ -30,6 +30,12 @@ orchestrator:
     fallback-models:
       "[claude-opus-5.5]": claude-sonnet-5.5
       "[claude-sonnet-5.5]": claude-sonnet-5
+  replan:
+    # A stage may be produced at most this many times in one run (first version plus re-plans).
+    max-revisions: 3
+  audit:
+    # One JSON-lines file per run.
+    dir: runs/audit
   workspace:
     # root: defaults to the enclosing git repository; build-command defaults to the Maven wrapper on url-shortener
     build-timeout-seconds: 600

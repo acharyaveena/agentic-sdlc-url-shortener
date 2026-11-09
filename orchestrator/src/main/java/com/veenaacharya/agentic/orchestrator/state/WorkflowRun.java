@@ -79,6 +79,15 @@ public class WorkflowRun {
         this.status = RunStatus.AWAITING_APPROVAL;
     }
 
+    /** Brings a paused or failed run back so a re-planned stage can run; finished runs stay finished otherwise. */
+    public void reopen() {
+        if (status != RunStatus.AWAITING_APPROVAL && status != RunStatus.FAILED) {
+            throw new IllegalStateException("run " + id + " cannot be re-planned while " + status);
+        }
+        this.status = RunStatus.RUNNING;
+        this.finishedAt = null;
+    }
+
     public void assignBranch(String branchName) {
         this.branch = branchName;
     }

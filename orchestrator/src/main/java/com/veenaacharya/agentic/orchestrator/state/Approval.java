@@ -66,6 +66,10 @@ public class Approval {
         decide(ApprovalStatus.REJECTED, actor, note, at);
     }
 
+    public void supersede(String actor, String note, Instant at) {
+        decide(ApprovalStatus.SUPERSEDED, actor, note, at);
+    }
+
     private void decide(ApprovalStatus decision, String actor, String note, Instant at) {
         if (status != ApprovalStatus.PENDING) {
             throw new IllegalStateException(

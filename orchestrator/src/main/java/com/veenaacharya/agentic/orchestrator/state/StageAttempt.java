@@ -28,6 +28,9 @@ public class StageAttempt {
     @Column(nullable = false)
     private int attemptNumber;
 
+    @Column(nullable = false)
+    private int revision;
+
     /** Null for stages that do not call a model (build, policy scan). */
     private String model;
 
@@ -48,8 +51,14 @@ public class StageAttempt {
 
     public StageAttempt(String runId, String stageId, int attemptNumber, String model, boolean succeeded,
                         String error, Instant startedAt, Instant finishedAt) {
+        this(runId, stageId, 1, attemptNumber, model, succeeded, error, startedAt, finishedAt);
+    }
+
+    public StageAttempt(String runId, String stageId, int revision, int attemptNumber, String model,
+                        boolean succeeded, String error, Instant startedAt, Instant finishedAt) {
         this.runId = runId;
         this.stageId = stageId;
+        this.revision = revision;
         this.attemptNumber = attemptNumber;
         this.model = model;
         this.succeeded = succeeded;
@@ -72,6 +81,10 @@ public class StageAttempt {
 
     public int getAttemptNumber() {
         return attemptNumber;
+    }
+
+    public int getRevision() {
+        return revision;
     }
 
     public String getModel() {

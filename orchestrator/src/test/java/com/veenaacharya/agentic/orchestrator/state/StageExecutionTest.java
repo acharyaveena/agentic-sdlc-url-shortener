@@ -68,7 +68,7 @@ class StageExecutionTest {
 
         execution.start(T0);
         assertThatThrownBy(() -> execution.skip(T1))
-                .hasMessage("stage code must be PENDING but is RUNNING");
+                .hasMessage("stage code must be PENDING or STALE but is RUNNING");
     }
 
     @Test
@@ -186,6 +186,121 @@ class StageExecutionTest {
         assertThat(attempt.getError()).hasSize(StageAttempt.MAX_ERROR_LENGTH);
         assertThat(attempt.getStartedAt()).isEqualTo(T0);
         assertThat(attempt.getFinishedAt()).isEqualTo(T1);
+    }
+
+    @Test
+    void outputHashFollowsTheOutputAndInputsRoundTrip() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.recordInputs("in", java.util.Map.of("requirements", "abc"));
+        execution.start(T0);
+        execution.succeed("abc", T1);
+
+        assertThat(execution.getOutputHash())
+                .isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assertThat(execution.getInputHash()).isEqualTo("in");
+        assertThat(execution.consumedUpstream()).containsExactly(java.util.Map.entry("requirements", "abc"));
+        assertThat(new StageExecution("run-1", "x").consumedUpstream()).isEmpty();
+    }
+
+    @Test
+    void staleStageGetsANewRevisionAndCanRunAgain() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.start(T0);
+        execution.awaitApproval("v1");
+
+        execution.markStale("upstream stage requirements changed");
+
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.STALE);
+        assertThat(execution.getRevision()).isEqualTo(2);
+        assertThat(execution.getError()).isEqualTo("upstream stage requirements changed");
+        assertThat(execution.isSatisfied()).isFalse();
+        assertThat(execution.isDeadEnd()).isFalse();
+
+        execution.start(T1);
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.RUNNING);
+        assertThat(execution.getError()).isNull();
+    }
+
+    @Test
+    void replanReopensASucceededOrRejectedStageWithFeedback() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.start(T0);
+        execution.awaitApproval("v1");
+        execution.reject("rejected by alice: too broad", T1);
+
+        execution.replan("Re-plan requested by alice: too broad");
+
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.PENDING);
+        assertThat(execution.getRevision()).isEqualTo(2);
+        assertThat(execution.getReplanFeedback()).isEqualTo("Re-plan requested by alice: too broad");
+        assertThat(execution.getError()).isNull();
+        assertThat(execution.getStartedAt()).isNull();
+        assertThat(execution.getFinishedAt()).isNull();
+    }
+
+    @Test
+    void staleClearsReplanFeedbackAndOnlyBlockedStagesReopen() {
+        StageExecution replanned = new StageExecution("run-1", "design");
+        replanned.start(T0);
+        replanned.succeed("v1", T1);
+        replanned.replan("feedback");
+        replanned.start(T0);
+        replanned.succeed("v2", T1);
+        replanned.markStale("upstream changed");
+        assertThat(replanned.getReplanFeedback()).isNull();
+        assertThat(replanned.getRevision()).isEqualTo(3);
+
+        StageExecution blocked = new StageExecution("run-1", "code");
+        blocked.block("upstream stage did not succeed: design");
+        blocked.reopen();
+        assertThat(blocked.getStatus()).isEqualTo(StageStatus.PENDING);
+        assertThat(blocked.getError()).isNull();
+
+        assertThatThrownBy(() -> new StageExecution("run-1", "x").reopen())
+                .hasMessage("stage x must be BLOCKED but is PENDING");
+        assertThatThrownBy(() -> new StageExecution("run-1", "x").markStale("r"))
+                .hasMessage("stage x must be SUCCEEDED or AWAITING_APPROVAL but is PENDING");
+        assertThatThrownBy(() -> new StageExecution("run-1", "x").replan("r"))
+                .hasMessage("stage x must be SUCCEEDED or AWAITING_APPROVAL or FAILED but is PENDING");
+    }
+
+    @Test
+    void runReopensOnlyFromAwaitingApprovalOrFailed() {
+        WorkflowRun paused = new WorkflowRun("s", ChangeType.GREENFIELD, "r", T0);
+        paused.markAwaitingApproval();
+        paused.reopen();
+        assertThat(paused.getStatus()).isEqualTo(RunStatus.RUNNING);
+
+        WorkflowRun failed = new WorkflowRun("s", ChangeType.GREENFIELD, "r", T0);
+        failed.finish(RunStatus.FAILED, T1);
+        failed.reopen();
+        assertThat(failed.getFinishedAt()).isNull();
+
+        WorkflowRun stopped = new WorkflowRun("s", ChangeType.GREENFIELD, "r", T0);
+        stopped.safeStop("x", null, null, T1);
+        assertThatThrownBy(stopped::reopen)
+                .hasMessage("run " + stopped.getId() + " cannot be re-planned while SAFE_STOPPED");
+    }
+
+    @Test
+    void decisionCopiesTheLineageOfTheStageRevision() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.recordInputs("in", java.util.Map.of("requirements", "abc"));
+        execution.start(T0);
+        execution.recordCommit("sha1");
+        execution.succeed("plan", T1);
+
+        Decision decision = new Decision(execution, "claude-opus-5.5", T1);
+
+        assertThat(decision.getRunId()).isEqualTo("run-1");
+        assertThat(decision.getStageId()).isEqualTo("design");
+        assertThat(decision.getRevision()).isEqualTo(1);
+        assertThat(decision.getInputHash()).isEqualTo("in");
+        assertThat(decision.getUpstreamHashes()).isEqualTo("requirements=abc");
+        assertThat(decision.getOutputHash()).isEqualTo(execution.getOutputHash());
+        assertThat(decision.getModel()).isEqualTo("claude-opus-5.5");
+        assertThat(decision.getCommitSha()).isEqualTo("sha1");
+        assertThat(decision.getRecordedAt()).isEqualTo(T1);
     }
 
     @Test

@@ -41,9 +41,21 @@ public class MockAgentRuntime implements AgentRuntime {
             return canned;
         }
         String bundled = bundledOutput(request.stageId());
-        return bundled != null
-                ? bundled
-                : "# " + request.stageId() + " (mock output)\n\nmodel: " + request.model();
+        if (bundled == null) {
+            return "# " + request.stageId() + " (mock output)\n\nmodel: " + request.model();
+        }
+        return bundled + revisionNote(request.userPrompt());
+    }
+
+    /** A re-planned or retried stage gets feedback; echoing it changes the output the way a real model would. */
+    private static String revisionNote(String prompt) {
+        String header = "## Previous attempt failed\n";
+        int at = prompt == null ? -1 : prompt.indexOf(header);
+        if (at < 0) {
+            return "";
+        }
+        String feedback = prompt.substring(at + header.length()).lines().findFirst().orElse("");
+        return "\nRevision note: this version addresses: " + feedback + "\n";
     }
 
     private static String bundledOutput(String stageId) {
