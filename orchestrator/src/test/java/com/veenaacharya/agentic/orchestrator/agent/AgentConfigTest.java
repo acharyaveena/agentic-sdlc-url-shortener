@@ -34,6 +34,13 @@ class AgentConfigTest {
     }
 
     @Test
+    void copilotMessageCarriesTheUserPrompt() {
+        AgentRequest request = new AgentRequest("run-1", "design", "claude-opus-5.5", "SYSTEM", "USER PROMPT");
+
+        assertThat(CopilotSdkAgentRuntime.messageOptions(request).getPrompt()).isEqualTo("USER PROMPT");
+    }
+
+    @Test
     void copilotSessionIsConfiguredWithModelAndAppendedSystemPrompt() {
         AgentRequest request = new AgentRequest("run-1", "design", "claude-opus-5.5", "SYSTEM", "USER");
 

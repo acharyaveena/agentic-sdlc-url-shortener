@@ -28,7 +28,7 @@ public class StageAttempt {
     @Column(nullable = false)
     private int attemptNumber;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "integer default 1")
     private int revision;
 
     /** Null for stages that do not call a model (build, policy scan). */

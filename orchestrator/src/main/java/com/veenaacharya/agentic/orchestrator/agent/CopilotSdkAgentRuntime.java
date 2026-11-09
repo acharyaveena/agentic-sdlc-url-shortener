@@ -2,6 +2,7 @@ package com.veenaacharya.agentic.orchestrator.agent;
 
 import com.github.copilot.CopilotClient;
 import com.github.copilot.SystemMessageMode;
+import com.github.copilot.rpc.MessageOptions;
 import com.github.copilot.rpc.PermissionRequestResult;
 import com.github.copilot.rpc.SessionConfig;
 import com.github.copilot.rpc.SystemMessageConfig;
@@ -16,6 +17,9 @@ import java.util.concurrent.TimeoutException;
  */
 public class CopilotSdkAgentRuntime implements AgentRuntime, AutoCloseable {
 
+    /** Margin so the SDK's own timeout error, which says more, arrives before our outer wait gives up. */
+    private static final long OUTER_WAIT_MARGIN_SECONDS = 10;
+
     private final long timeoutSeconds;
     private CopilotClient client;
 
@@ -26,7 +30,9 @@ public class CopilotSdkAgentRuntime implements AgentRuntime, AutoCloseable {
     @Override
     public String complete(AgentRequest request) {
         try (var session = client().createSession(sessionConfig(request)).get(timeoutSeconds, TimeUnit.SECONDS)) {
-            var reply = session.sendAndWait(request.userPrompt()).get(timeoutSeconds, TimeUnit.SECONDS);
+            // The prompt-only overload applies the SDK's own 60 s limit, so the timeout is passed explicitly.
+            var reply = session.sendAndWait(messageOptions(request), timeoutSeconds * 1000)
+                    .get(timeoutSeconds + OUTER_WAIT_MARGIN_SECONDS, TimeUnit.SECONDS);
             String text = reply == null ? null : reply.getData().content();
             if (text == null || text.isBlank()) {
                 throw new AgentException("model " + request.model() + " returned an empty answer");
@@ -44,6 +50,10 @@ public class CopilotSdkAgentRuntime implements AgentRuntime, AutoCloseable {
         } catch (Exception e) {
             throw new AgentException("model call failed: " + e, e);
         }
+    }
+
+    static MessageOptions messageOptions(AgentRequest request) {
+        return new MessageOptions().setPrompt(request.userPrompt());
     }
 
     static SessionConfig sessionConfig(AgentRequest request) {

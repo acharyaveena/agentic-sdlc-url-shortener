@@ -68,6 +68,18 @@ public final class TestProcesses {
         }
     }
 
+    /** Prints a failing Maven-style log: informational lines around the actual errors. */
+    public static final class MavenFailure {
+
+        public static void main(String[] args) {
+            System.out.println("[INFO] Scanning for projects");
+            System.out.println("[ERROR] A.java:[7,32] package io.example does not exist");
+            System.out.println("[INFO] Total time: 1 s");
+            System.out.println("[ERROR] Failed to execute goal compiler:testCompile");
+            System.exit(1);
+        }
+    }
+
     public static final class Sleep {
 
         public static void main(String[] args) throws InterruptedException {

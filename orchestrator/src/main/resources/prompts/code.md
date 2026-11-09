@@ -11,4 +11,18 @@ FILE: url-shortener/<path relative to the repository root>
 
 Always use a fence of four backticks around file contents, so files that contain triple backticks stay intact.
 
-Only write paths inside `url-shortener/src/main/`. After the last file, add a short "Notes" section listing assumptions and anything a reviewer should check.
+Only write paths inside `url-shortener/src/main/`, plus `url-shortener/pom.xml`.
+
+Always include `url-shortener/pom.xml`, covering every dependency and build plugin that the approved design lists, including those under "Approvals needed". You cannot see the existing pom, so write the whole file. It must keep this parent, which already manages the Spring Boot version and the Java 21 settings, so omit versions for Spring Boot artifacts:
+
+```xml
+<parent>
+    <groupId>com.veenaacharya.agentic</groupId>
+    <artifactId>agentic-sdlc-url-shortener</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</parent>
+```
+
+Use `<artifactId>url-shortener</artifactId>`. Give an explicit version to any dependency or plugin that Spring Boot does not manage. Use only the libraries named in the approved design, and do not add `<repositories>`.
+
+After the last file, add a short "Notes" section listing assumptions and anything a reviewer should check.

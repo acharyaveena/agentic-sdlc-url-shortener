@@ -27,7 +27,7 @@ public class Decision {
     @Column(nullable = false)
     private String stageId;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "integer default 1")
     private int revision;
 
     private String inputHash;

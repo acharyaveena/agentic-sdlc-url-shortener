@@ -44,6 +44,15 @@ class BuildStageExecutorTest {
     }
 
     @Test
+    void failedMavenBuildLeadsWithItsErrorLinesAndDropsTheInfoNoise() {
+        StageResult result = executor(TestProcesses.run(TestProcesses.MavenFailure.class), 30).execute(CONTEXT);
+
+        assertThat(result.error()).isEqualTo("build failed (exit 1):\n"
+                + "[ERROR] A.java:[7,32] package io.example does not exist\n"
+                + "[ERROR] Failed to execute goal compiler:testCompile");
+    }
+
+    @Test
     void buildThatRunsTooLongIsKilledAndFailed() {
         StageResult result = executor(TestProcesses.run(TestProcesses.Sleep.class), 1).execute(CONTEXT);
 

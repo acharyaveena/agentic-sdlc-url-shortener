@@ -48,4 +48,19 @@ class DefaultPolicyGuardTest {
         assertThat(properties.allowedGroupIds()).contains("org.springframework.boot", "com.h2database");
         assertThat(new PolicyProperties(List.of("x.y")).allowedGroupIds()).containsExactly("x.y");
     }
+
+    @Test
+    void bundledAllowlistPermitsTheReviewedOpenApiParserAndCoveragePluginButNotOtherLibraries() {
+        PolicyGuard guard = new PolicyConfig().writeGuard(new PolicyProperties(
+                List.of("org.springframework.boot", "io.swagger.parser.v3", "org.jacoco")));
+        String pom = "<project><dependencies>"
+                + "<dependency><groupId>io.swagger.parser.v3</groupId><artifactId>swagger-parser</artifactId></dependency>"
+                + "<dependency><groupId>com.example.other</groupId><artifactId>x</artifactId></dependency>"
+                + "</dependencies><build><plugins><plugin><groupId>org.jacoco</groupId>"
+                + "<artifactId>jacoco-maven-plugin</artifactId></plugin></plugins></build></project>";
+
+        assertThat(guard.check(List.of(new FileChange("url-shortener/pom.xml", pom)),
+                new PolicyContext("code", Map.of()))).extracting(Violation::message)
+                .containsExactly("dependency groupId 'com.example.other' is not on the allowlist");
+    }
 }

@@ -58,7 +58,7 @@ public class StageExecution {
     private String commitSha;
 
     /** Starts at 1 and goes up each time the stage is re-planned or goes stale and must run again. */
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "integer default 1")
     private int revision;
 
     /** Hash of everything the stage was given: request, upstream outputs and any reviewer feedback. */
