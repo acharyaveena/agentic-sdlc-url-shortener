@@ -14,8 +14,12 @@ import com.veenaacharya.agentic.orchestrator.agent.AgentProperties;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.gate.StageGates;
+import com.veenaacharya.agentic.orchestrator.recovery.RecoveryProperties;
+import com.veenaacharya.agentic.orchestrator.recovery.RetryingStageRunner;
+import com.veenaacharya.agentic.orchestrator.recovery.RollbackStrategy;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
+import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageStatus;
@@ -52,6 +56,9 @@ class WorkflowEngineTest {
 
     @Autowired
     private ApprovalRepository approvalRepository;
+
+    @Autowired
+    private StageAttemptRepository attempts;
 
     @Test
     void greenfieldRunSkipsImpactAnalysisAndPersistsEveryStage() {
@@ -132,7 +139,7 @@ class WorkflowEngineTest {
 
         WorkflowRun run = engine(executor).run("failing", ChangeType.GREENFIELD, "req");
 
-        assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
         assertThat(stage(run, "code").getError()).isEqualTo("compilation failed");
         assertThat(stage(run, "tests").getStatus()).isEqualTo(StageStatus.SUCCEEDED);
         assertThat(stage(run, "build-test").getStatus()).isEqualTo(StageStatus.BLOCKED);
@@ -151,7 +158,7 @@ class WorkflowEngineTest {
 
         WorkflowRun run = engine(executor).run("crash", ChangeType.BROWNFIELD, "req");
 
-        assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
         assertThat(stage(run, "requirements").getStatus()).isEqualTo(StageStatus.FAILED);
         assertThat(stage(run, "requirements").getError()).isEqualTo("IllegalStateException: model timeout");
         assertThat(stage(run, "impact-analysis").getStatus()).isEqualTo(StageStatus.BLOCKED);
@@ -209,7 +216,10 @@ class WorkflowEngineTest {
                 List.of("url-shortener/" + ctx.stage().id())), workspace).run("greenfield", ChangeType.GREENFIELD, "req");
 
         assertThat(run.getBranch()).isEqualTo("agent/test-branch");
+        assertThat(run.getBaseCommit()).isEqualTo("base-sha");
         assertThat(runs.findById(run.getId()).orElseThrow().getBranch()).isEqualTo("agent/test-branch");
+        assertThat(stage(run, "code").getCommitSha()).isEqualTo("sha-code");
+        assertThat(stage(run, "impact-analysis").getCommitSha()).isNull();
         assertThat(workspace.started).isEqualTo(1);
         assertThat(workspace.commits).extracting(c -> c.stage())
                 .containsExactlyInAnyOrder("requirements", "design", "code", "tests", "build-test", "docs",
@@ -240,7 +250,7 @@ class WorkflowEngineTest {
         WorkflowRun run = engine(ctx -> StageResult.success("ok"), workspace)
                 .run("commit-fail", ChangeType.GREENFIELD, "req");
 
-        assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
         assertThat(stage(run, "design").getStatus()).isEqualTo(StageStatus.FAILED);
         assertThat(stage(run, "design").getError()).isEqualTo("commit failed: git is unhappy");
         assertThat(stage(run, "code").getStatus()).isEqualTo(StageStatus.BLOCKED);
@@ -273,12 +283,12 @@ class WorkflowEngineTest {
         String failCommitFor;
 
         @Override
-        public String startRun(WorkflowRun run) {
+        public Start startRun(WorkflowRun run) {
             if (refuseStart) {
                 throw new IllegalStateException("working tree is dirty");
             }
             started++;
-            return "agent/test-branch";
+            return new Start("agent/test-branch", "base-sha");
         }
 
         @Override
@@ -286,11 +296,12 @@ class WorkflowEngineTest {
         }
 
         @Override
-        public void commitStage(String runId, String stageId, String output, List<String> files) {
+        public String commitStage(String runId, String stageId, String output, List<String> files) {
             if (stageId.equals(failCommitFor)) {
                 throw new IllegalStateException("git is unhappy");
             }
             commits.add(new Commit(runId, stageId, output, files));
+            return "sha-" + stageId;
         }
     }
 
@@ -300,10 +311,15 @@ class WorkflowEngineTest {
 
     private WorkflowEngine engine(StageExecutor executor, RunWorkspace workspace) {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        AgentProperties agent = new AgentProperties("mock", null, null, 0);
         ApprovalService approvals = new ApprovalService(approvalRepository, stageExecutions, clock,
-                new ApprovalProperties(false), new AgentProperties("mock", null, null, 0));
-        return new WorkflowEngine(WORKFLOW, executor, new StageGates(WORKFLOW, approvals), approvals,
-                workspace, runs, stageExecutions, clock);
+                new ApprovalProperties(false), agent);
+        StageGates gates = new StageGates(WORKFLOW, approvals);
+        // One attempt and no fallback, so these tests see each stage's first result unchanged.
+        RetryingStageRunner runner = new RetryingStageRunner(executor, gates, agent,
+                new RecoveryProperties(1, Map.of()), clock);
+        return new WorkflowEngine(WORKFLOW, runner, gates, approvals, workspace, RollbackStrategy.NONE,
+                runs, stageExecutions, attempts, clock);
     }
 
     private Map<String, StageStatus> statuses(WorkflowRun run) {

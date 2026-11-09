@@ -49,6 +49,9 @@ public class StageExecution {
     @Column(length = MAX_ERROR_LENGTH)
     private String error;
 
+    /** Commit that recorded this stage's result; null until committed. */
+    private String commitSha;
+
     protected StageExecution() {
     }
 
@@ -118,6 +121,22 @@ public class StageExecution {
     /** True when downstream stages can never proceed in this run. */
     public boolean isDeadEnd() {
         return status == StageStatus.FAILED || status == StageStatus.BLOCKED;
+    }
+
+    /** Number of attempts used, including retries and the fallback model. */
+    public void recordAttempts(int count) {
+        if (count < 1) {
+            throw new IllegalArgumentException("attempt count must be at least 1, was " + count);
+        }
+        attempt = count;
+    }
+
+    public void recordCommit(String sha) {
+        commitSha = sha;
+    }
+
+    public String getCommitSha() {
+        return commitSha;
     }
 
     private void requireStatus(StageStatus expected) {

@@ -24,6 +24,12 @@ orchestrator:
   approval:
     # Mock mode only; release always needs a human.
     auto-approve: false
+  recovery:
+    # Tries on the stage's own model, then one try on the fallback model. Build and policy scan run once.
+    max-attempts: 2
+    fallback-models:
+      "[claude-opus-5.5]": claude-sonnet-5.5
+      "[claude-sonnet-5.5]": claude-sonnet-5
   workspace:
     # root: defaults to the enclosing git repository; build-command defaults to the Maven wrapper on url-shortener
     build-timeout-seconds: 600

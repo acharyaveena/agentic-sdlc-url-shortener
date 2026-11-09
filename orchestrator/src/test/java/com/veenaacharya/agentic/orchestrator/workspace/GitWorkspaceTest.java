@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.veenaacharya.agentic.orchestrator.audit.Hashes;
+import com.veenaacharya.agentic.orchestrator.engine.RunWorkspace;
 import com.veenaacharya.agentic.orchestrator.state.WorkflowRun;
 import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
 import java.io.IOException;
@@ -40,11 +41,13 @@ class GitWorkspaceTest {
     @Test
     void startRunCreatesAndChecksOutABranchNamedAfterScenarioAndRun() {
         WorkflowRun run = run("Greenfield URL Shortener!");
+        String mainHead = git(repo, "rev-parse", "HEAD");
 
-        String branch = workspace.startRun(run);
+        RunWorkspace.Start start = workspace.startRun(run);
 
-        assertThat(branch).isEqualTo("agent/greenfield-url-shortener-" + run.getId().substring(0, 8));
-        assertThat(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo(branch);
+        assertThat(start.branch()).isEqualTo("agent/greenfield-url-shortener-" + run.getId().substring(0, 8));
+        assertThat(start.baseCommit()).isEqualTo(mainHead);
+        assertThat(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo(start.branch());
     }
 
     @Test
@@ -69,8 +72,9 @@ class GitWorkspaceTest {
         Files.writeString(repo.resolve("url-shortener/A.java"), "class A {}\n");
         Files.writeString(repo.resolve("url-shortener/B.java"), "class B {}\n");
 
-        workspace.commitStage("0123456789abcdef", "code", "the output", List.of("url-shortener/A.java"));
+        String sha = workspace.commitStage("0123456789abcdef", "code", "the output", List.of("url-shortener/A.java"));
 
+        assertThat(sha).isEqualTo(git(repo, "rev-parse", "HEAD")).hasSize(40);
         assertThat(git(repo, "log", "-1", "--format=%s")).isEqualTo("chore(agent): code output [run 01234567]");
         assertThat(git(repo, "log", "-1", "--format=%an <%ae>"))
                 .isEqualTo("agentic-orchestrator <orchestrator@users.noreply.github.com>");
@@ -95,7 +99,7 @@ class GitWorkspaceTest {
     @Test
     void resumeRunSwitchesBackToTheRunBranch() {
         WorkflowRun run = run("s");
-        run.assignBranch(workspace.startRun(run));
+        run.assignBranch(workspace.startRun(run).branch());
         git(repo, "checkout", "-q", "main");
 
         workspace.resumeRun(run);
@@ -110,7 +114,7 @@ class GitWorkspaceTest {
         assertThat(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main");
 
         WorkflowRun run = run("s");
-        run.assignBranch(workspace.startRun(run));
+        run.assignBranch(workspace.startRun(run).branch());
         workspace.resumeRun(run);
         assertThat(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo(run.getBranch());
     }
@@ -118,7 +122,7 @@ class GitWorkspaceTest {
     @Test
     void resumeRunRefusesToSwitchWithUncommittedChanges() throws IOException {
         WorkflowRun run = run("s");
-        run.assignBranch(workspace.startRun(run));
+        run.assignBranch(workspace.startRun(run).branch());
         git(repo, "checkout", "-q", "main");
         Files.writeString(repo.resolve("scratch.txt"), "x");
 

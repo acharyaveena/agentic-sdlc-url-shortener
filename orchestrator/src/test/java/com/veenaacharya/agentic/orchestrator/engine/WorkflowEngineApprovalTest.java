@@ -9,10 +9,14 @@ import com.veenaacharya.agentic.orchestrator.agent.MockAgentRuntime;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalProperties;
 import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
 import com.veenaacharya.agentic.orchestrator.gate.StageGates;
+import com.veenaacharya.agentic.orchestrator.recovery.RecoveryProperties;
+import com.veenaacharya.agentic.orchestrator.recovery.RetryingStageRunner;
+import com.veenaacharya.agentic.orchestrator.recovery.RollbackStrategy;
 import com.veenaacharya.agentic.orchestrator.state.Approval;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalRepository;
 import com.veenaacharya.agentic.orchestrator.state.ApprovalStatus;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
+import com.veenaacharya.agentic.orchestrator.state.StageAttemptRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
 import com.veenaacharya.agentic.orchestrator.state.StageStatus;
@@ -45,6 +49,9 @@ class WorkflowEngineApprovalTest {
 
     @Autowired
     private ApprovalRepository approvalRepository;
+
+    @Autowired
+    private StageAttemptRepository attempts;
 
     private final MockAgentRuntime runtime = new MockAgentRuntime();
 
@@ -142,7 +149,7 @@ class WorkflowEngineApprovalTest {
 
         WorkflowRun run = engine(false).run("greenfield", ChangeType.GREENFIELD, "x");
 
-        assertThat(run.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(run.getStatus()).isEqualTo(RunStatus.SAFE_STOPPED);
         assertThat(stage(run, "requirements").getError()).isEqualTo("exit gate failed: missing required sections: "
                 + "[Problem statement, Ambiguities, Assumptions, Acceptance criteria]");
         assertThat(approvalRepository.findByRunIdOrderByIdAsc(run.getId())).isEmpty();
@@ -207,8 +214,12 @@ class WorkflowEngineApprovalTest {
 
     private WorkflowEngine engine(boolean autoApprove) {
         ApprovalService approvals = approvals(autoApprove);
-        return new WorkflowEngine(WORKFLOW, executor(), new StageGates(WORKFLOW, approvals), approvals,
-                RunWorkspace.NONE, runs, stageExecutions, Clock.fixed(NOW, ZoneOffset.UTC));
+        StageGates gates = new StageGates(WORKFLOW, approvals);
+        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        RetryingStageRunner runner = new RetryingStageRunner(executor(), gates, AGENT,
+                new RecoveryProperties(1, Map.of()), clock);
+        return new WorkflowEngine(WORKFLOW, runner, gates, approvals, RunWorkspace.NONE, RollbackStrategy.NONE,
+                runs, stageExecutions, attempts, clock);
     }
 
     /** Model-backed stages use the mock agent; build and policy-scan stages are stood in for. */
