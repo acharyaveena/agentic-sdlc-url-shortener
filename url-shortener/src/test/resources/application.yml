@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    # In-memory and case-folded the same as H2 file mode, so tests never touch the real data/ database.
+    url: jdbc:h2:mem:urlshortener-test;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always

@@ -1,5 +1,6 @@
 package com.veenaacharya.shortener.ratelimit;
 
+import com.veenaacharya.shortener.config.AppProperties;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -24,6 +25,11 @@ public class FixedWindowRateLimiter {
         this.limit = limit;
         this.window = window;
         this.clock = clock;
+    }
+
+    /** Reads the limit and window from configuration, as the tests stage expected. */
+    public FixedWindowRateLimiter(AppProperties properties, Clock clock) {
+        this(properties.getRateLimit().getRequests(), properties.getRateLimit().getWindow(), clock);
     }
 
     public Decision tryAcquire(String clientKey) {

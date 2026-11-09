@@ -22,12 +22,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:collision;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:collision;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
         "app.base-url=https://short.example",
         "app.rate-limit.requests=1000"
 })
 @AutoConfigureMockMvc
-class CollisionIT {
+class CollisionTest {
 
     private static final String BODY = "{\"url\":\"https://example.com/page\"}";
 

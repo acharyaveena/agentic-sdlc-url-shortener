@@ -25,12 +25,12 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:linkapi;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:linkapi;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
         "app.base-url=https://short.example",
         "app.rate-limit.requests=1000"
 })
 @AutoConfigureMockMvc
-class LinkApiIT {
+class LinkApiTest {
 
     private static final String PREFIX = "https://example.com/";
 

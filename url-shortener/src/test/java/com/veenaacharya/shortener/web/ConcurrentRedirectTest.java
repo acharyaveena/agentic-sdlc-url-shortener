@@ -20,11 +20,11 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "spring.datasource.url=jdbc:h2:mem:concurrent;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:concurrent;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
         "app.base-url=https://short.example",
         "app.rate-limit.requests=1000"
 })
-class ConcurrentRedirectIT {
+class ConcurrentRedirectTest {
 
     private static final int REQUESTS = 50;
 

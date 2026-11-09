@@ -25,13 +25,13 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:ratelimit;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:ratelimit;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
         "app.base-url=https://short.example",
         "app.rate-limit.requests=10",
         "app.rate-limit.window=PT1M"
 })
 @AutoConfigureMockMvc
-class RateLimitIT {
+class RateLimitTest {
 
     private static final Instant START = Instant.parse("2026-01-01T00:00:00Z");
 
