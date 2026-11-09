@@ -124,7 +124,7 @@ public class EvidenceExporter {
             md.append("| chaos | ").append(run.getChaos()).append(" |\n");
         }
         if (run.getStopReason() != null) {
-            md.append("| stop reason | ").append(escape(run.getStopReason())).append(" |\n")
+            md.append("| stop reason | ").append(escape(firstLine(run.getStopReason()))).append(" |\n")
                     .append("| rolled back to | ").append(orDash(shortSha(run.getRollbackTarget()))).append(" |\n")
                     .append("| failed state kept at | ").append(orDash(run.getPreservedRef())).append(" |\n");
         }
@@ -134,7 +134,14 @@ public class EvidenceExporter {
                     .append(stage.getRevision()).append(" | ").append(stage.getAttempt()).append(" | ")
                     .append(orDash(shortSha(stage.getCommitSha()))).append(" |\n");
         }
+        if (run.getStopReason() != null && run.getStopReason().lines().count() > 1) {
+            md.append("\n## Stop reason detail\n\n```text\n").append(run.getStopReason()).append("\n```\n");
+        }
         return md.toString();
+    }
+
+    private static String firstLine(String text) {
+        return text.lines().findFirst().orElse("");
     }
 
     private static String approvalTable(List<Approval> approvals) {

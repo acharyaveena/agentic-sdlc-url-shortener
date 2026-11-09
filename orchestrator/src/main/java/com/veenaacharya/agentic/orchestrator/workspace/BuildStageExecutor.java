@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 /** Builds and tests the product module for real; the stage fails if the build does. */
@@ -35,7 +36,7 @@ public class BuildStageExecutor implements StageExecutor {
             return StageResult.failure("build timed out after " + properties.buildTimeoutSeconds() + "s:\n" + tail);
         }
         if (!result.ok()) {
-            return StageResult.failure("build failed (exit " + result.exitCode() + "):\n" + tail);
+            return StageResult.failure("build failed (exit " + result.exitCode() + "):\n" + errorLinesOr(tail));
         }
         return StageResult.success("## Build result\n\nCommand: `" + sanitise(String.join(" ", command))
                 + "`\n\nExit code: 0\n\n```text\n" + tail + "\n```\n");
@@ -52,6 +53,12 @@ public class BuildStageExecutor implements StageExecutor {
     private static String tail(String output) {
         List<String> lines = output.lines().toList();
         return String.join("\n", lines.subList(Math.max(0, lines.size() - TAIL_LINES), lines.size()));
+    }
+
+    /** Maven's [ERROR] lines say what went wrong; the surrounding [INFO] lines are noise, so they lead on failure. */
+    private static String errorLinesOr(String tail) {
+        String errors = tail.lines().filter(line -> line.startsWith("[ERROR]")).collect(Collectors.joining("\n"));
+        return errors.isBlank() ? tail : errors;
     }
 
     /** Keeps local filesystem paths out of stored output. */

@@ -136,6 +136,24 @@ class EvidenceExporterTest {
     }
 
     @Test
+    void multiLineStopReasonShowsItsFirstLineInTheTableAndTheFullTextInADetailBlock() throws IOException {
+        StageExecutor failingBuild = context -> context.stage().kind().equals("build")
+                ? StageResult.failure("build failed (exit 1):\n[ERROR] A.java:[7,32] package x does not exist\n[ERROR] more")
+                : executor().execute(context);
+        WorkflowRun run = new EngineFixture(runs, stages, attempts, approvals, decisions)
+                .executor(failingBuild).audit(audit).autoApprove(true)
+                .recovery(new RecoveryProperties(1, Map.of())).engine()
+                .run("demo", ChangeType.GREENFIELD, "Build it");
+
+        exporter.export(run.getId(), Path.of("scenarios/failed-build"));
+
+        String summary = Files.readString(repo.resolve("scenarios/failed-build/run.md"));
+        assertThat(summary).contains("| stop reason | stage build-test failed after 1 attempt(s): build failed (exit 1): |")
+                .contains("## Stop reason detail", "[ERROR] A.java:[7,32] package x does not exist\n[ERROR] more");
+        assertThat(summary.lines().filter(l -> l.startsWith("| stop reason")).count()).isEqualTo(1);
+    }
+
+    @Test
     void reExportOverwritesPreviousFiles() throws IOException {
         WorkflowRun run = finishedDemoRun("Build it");
         exporter.export(run.getId(), Path.of("scenarios/demo"));
