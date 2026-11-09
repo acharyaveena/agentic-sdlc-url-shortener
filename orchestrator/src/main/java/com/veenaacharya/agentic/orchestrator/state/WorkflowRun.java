@@ -10,6 +10,8 @@ import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** One execution of the stage graph for a single change request. */
 @Entity
@@ -23,20 +25,25 @@ public class WorkflowRun {
     private String scenario;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(nullable = false, length = 32)
     private ChangeType changeType;
 
     @Lob
     private String request;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(nullable = false, length = 32)
     private RunStatus status;
 
     @Column(nullable = false)
     private Instant createdAt;
 
     private Instant finishedAt;
+
+    /** Git branch holding this run's commits; null when the run is not tied to a repository. */
+    private String branch;
 
     protected WorkflowRun() {
     }
@@ -52,6 +59,18 @@ public class WorkflowRun {
 
     public void markRunning() {
         this.status = RunStatus.RUNNING;
+    }
+
+    public void markAwaitingApproval() {
+        this.status = RunStatus.AWAITING_APPROVAL;
+    }
+
+    public void assignBranch(String branchName) {
+        this.branch = branchName;
+    }
+
+    public String getBranch() {
+        return branch;
     }
 
     public void finish(RunStatus finalStatus, Instant at) {

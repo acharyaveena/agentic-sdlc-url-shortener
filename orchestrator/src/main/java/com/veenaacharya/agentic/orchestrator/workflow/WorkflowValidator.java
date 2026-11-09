@@ -24,6 +24,10 @@ public class WorkflowValidator {
             if (byId.putIfAbsent(stage.id(), stage) != null) {
                 throw new WorkflowValidationException("duplicate stage id: " + stage.id());
             }
+            if (!StageDefinition.KINDS.contains(stage.kind())) {
+                throw new WorkflowValidationException(
+                        "stage '" + stage.id() + "' has unknown kind '" + stage.kind() + "'");
+            }
         }
 
         Map<String, Integer> inDegree = new LinkedHashMap<>();

@@ -3,6 +3,8 @@ package com.veenaacharya.agentic.orchestrator.state;
 public enum StageStatus {
     PENDING,
     RUNNING,
+    /** Output produced and gate-checked; a human must approve before downstream stages run. */
+    AWAITING_APPROVAL,
     SUCCEEDED,
     FAILED,
     SKIPPED,

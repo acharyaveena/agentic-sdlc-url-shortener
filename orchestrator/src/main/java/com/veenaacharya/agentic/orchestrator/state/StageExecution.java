@@ -10,6 +10,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /** State of one stage within a run. Transitions are guarded so illegal moves fail loudly. */
 @Entity
@@ -31,8 +33,10 @@ public class StageExecution {
     @Column(nullable = false)
     private int attempt;
 
+    // Plain varchar so new statuses never need a schema migration (H2 enum columns are not widened by ddl-auto).
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
+    @Column(nullable = false, length = 32)
     private StageStatus status;
 
     private Instant startedAt;
@@ -65,6 +69,25 @@ public class StageExecution {
         requireStatus(StageStatus.RUNNING);
         status = StageStatus.SUCCEEDED;
         output = stageOutput;
+        finishedAt = at;
+    }
+
+    public void awaitApproval(String stageOutput) {
+        requireStatus(StageStatus.RUNNING);
+        status = StageStatus.AWAITING_APPROVAL;
+        output = stageOutput;
+    }
+
+    public void approve(Instant at) {
+        requireStatus(StageStatus.AWAITING_APPROVAL);
+        status = StageStatus.SUCCEEDED;
+        finishedAt = at;
+    }
+
+    public void reject(String reason, Instant at) {
+        requireStatus(StageStatus.AWAITING_APPROVAL);
+        status = StageStatus.FAILED;
+        error = truncate(reason);
         finishedAt = at;
     }
 

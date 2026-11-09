@@ -1,5 +1,8 @@
 package com.veenaacharya.agentic.orchestrator.engine;
 
+import com.veenaacharya.agentic.orchestrator.gate.ApprovalService;
+import com.veenaacharya.agentic.orchestrator.gate.GateResult;
+import com.veenaacharya.agentic.orchestrator.gate.StageGates;
 import com.veenaacharya.agentic.orchestrator.state.RunStatus;
 import com.veenaacharya.agentic.orchestrator.state.StageExecution;
 import com.veenaacharya.agentic.orchestrator.state.StageExecutionRepository;
@@ -25,8 +28,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Runs the stage graph. Stages whose dependencies are all satisfied run in parallel on virtual
- * threads; a stage with several dependencies is a join and waits for all of them. All state
- * changes and persistence happen on the calling thread, so workers never touch JPA entities.
+ * threads; a stage with several dependencies is a join and waits for all of them. A stage that
+ * needs approval parks in AWAITING_APPROVAL and the run pauses once nothing else can progress;
+ * {@link #resume} continues it after a human decision. All state changes and persistence happen
+ * on the calling thread, so workers never touch JPA entities.
  */
 @Component
 public class WorkflowEngine {
@@ -34,29 +39,57 @@ public class WorkflowEngine {
     private final WorkflowDefinition workflow;
     private final List<String> order;
     private final StageExecutor executor;
+    private final StageGates gates;
+    private final ApprovalService approvals;
+    private final RunWorkspace workspace;
     private final WorkflowRunRepository runs;
     private final StageExecutionRepository stageExecutions;
     private final Clock clock;
 
     public WorkflowEngine(WorkflowDefinition workflow,
                           StageExecutor executor,
+                          StageGates gates,
+                          ApprovalService approvals,
+                          RunWorkspace workspace,
                           WorkflowRunRepository runs,
                           StageExecutionRepository stageExecutions,
                           Clock clock) {
         this.workflow = workflow;
         this.order = new WorkflowValidator().validate(workflow);
         this.executor = executor;
+        this.gates = gates;
+        this.approvals = approvals;
+        this.workspace = workspace;
         this.runs = runs;
         this.stageExecutions = stageExecutions;
         this.clock = clock;
     }
 
     public WorkflowRun run(String scenario, ChangeType changeType, String request) {
-        WorkflowRun run = runs.save(new WorkflowRun(scenario, changeType, request, clock.instant()));
-        Map<String, StageExecution> executions = new LinkedHashMap<>();
+        WorkflowRun fresh = new WorkflowRun(scenario, changeType, request, clock.instant());
+        fresh.assignBranch(workspace.startRun(fresh));
+        WorkflowRun run = runs.save(fresh);
         for (String stageId : order) {
-            executions.put(stageId, stageExecutions.save(new StageExecution(run.getId(), stageId)));
+            stageExecutions.save(new StageExecution(run.getId(), stageId));
         }
+        return drive(run.getId());
+    }
+
+    /** Continues a paused run after approvals were decided. */
+    public WorkflowRun resume(String runId) {
+        WorkflowRun run = runs.findById(runId)
+                .orElseThrow(() -> new IllegalArgumentException("unknown run: " + runId));
+        if (run.getStatus() == RunStatus.SUCCEEDED || run.getStatus() == RunStatus.FAILED) {
+            throw new IllegalStateException("run " + runId + " already finished: " + run.getStatus());
+        }
+        return drive(runId);
+    }
+
+    private WorkflowRun drive(String runId) {
+        WorkflowRun run = runs.findById(runId).orElseThrow();
+        workspace.resumeRun(run);
+        Map<String, StageExecution> executions = new LinkedHashMap<>();
+        stageExecutions.findByRunIdOrderByIdAsc(runId).forEach(s -> executions.put(s.getStageId(), s));
         run.markRunning();
         run = runs.save(run);
 
@@ -70,10 +103,16 @@ public class WorkflowEngine {
                 }
                 Completion done = awaitNext(completions);
                 inFlight--;
-                record(executions.get(done.stageId()), done.result());
+                record(executions, done.stageId(), done.result());
             }
         }
 
+        boolean awaiting = executions.values().stream()
+                .anyMatch(s -> s.getStatus() == StageStatus.AWAITING_APPROVAL);
+        if (awaiting) {
+            run.markAwaitingApproval();
+            return runs.save(run);
+        }
         boolean succeeded = executions.values().stream().allMatch(StageExecution::isSatisfied);
         run.finish(succeeded ? RunStatus.SUCCEEDED : RunStatus.FAILED, clock.instant());
         return runs.save(run);
@@ -105,6 +144,12 @@ public class WorkflowEngine {
             }
             if (stage.isSkippedFor(run.getChangeType())) {
                 execution.skip(clock.instant());
+                stageExecutions.save(execution);
+                continue;
+            }
+            GateResult entry = gates.checkEntry(stageId, executions);
+            if (!entry.passed()) {
+                execution.block("entry gate failed: " + entry.summary());
                 stageExecutions.save(execution);
                 continue;
             }
@@ -140,13 +185,44 @@ public class WorkflowEngine {
         }
     }
 
-    private void record(StageExecution execution, StageResult result) {
-        if (result.succeeded()) {
-            execution.succeed(result.output(), clock.instant());
-        } else {
+    private void record(Map<String, StageExecution> executions, String stageId, StageResult result) {
+        StageExecution execution = executions.get(stageId);
+        StageDefinition stage = workflow.stage(stageId);
+        if (!result.succeeded()) {
             execution.fail(result.error(), clock.instant());
+        } else {
+            GateResult exit = gates.checkExit(stage, result.output());
+            if (!exit.passed()) {
+                execution.fail("exit gate failed: " + exit.summary(), clock.instant());
+            } else if (!committed(execution, result)) {
+                return;
+            } else if (stage.approval() != null) {
+                execution.awaitApproval(result.output());
+                stageExecutions.save(execution);
+                approvals.request(execution, stage.approval());
+                if (approvals.autoApproves(stage.approval())) {
+                    approvals.approve(execution.getRunId(), stageId, ApprovalService.AUTO_ACTOR,
+                            "auto-approved (mock mode)");
+                    executions.put(stageId, stageExecutions.findById(execution.getId()).orElseThrow());
+                }
+                return;
+            } else {
+                execution.succeed(result.output(), clock.instant());
+            }
         }
         stageExecutions.save(execution);
+    }
+
+    /** A stage only counts as done once its commit exists; a failed commit fails the stage. */
+    private boolean committed(StageExecution execution, StageResult result) {
+        try {
+            workspace.commitStage(execution.getRunId(), execution.getStageId(), result.output(), result.files());
+            return true;
+        } catch (RuntimeException e) {
+            execution.fail("commit failed: " + e.getMessage(), clock.instant());
+            stageExecutions.save(execution);
+            return false;
+        }
     }
 
     private static Completion awaitNext(CompletionService<Completion> completions) {

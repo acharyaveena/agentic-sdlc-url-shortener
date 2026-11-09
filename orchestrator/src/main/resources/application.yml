@@ -12,3 +12,29 @@ spring:
 
 orchestrator:
   workflow: workflow.yml
+  agent:
+    # mock needs no login; switch with --orchestrator.agent.mode=copilot
+    mode: mock
+    default-model: claude-sonnet-5.5
+    timeout-seconds: 300
+    models:
+      requirements: claude-opus-5.5
+      impact-analysis: claude-opus-5.5
+      design: claude-opus-5.5
+  approval:
+    # Mock mode only; release always needs a human.
+    auto-approve: false
+  workspace:
+    # root: defaults to the enclosing git repository; build-command defaults to the Maven wrapper on url-shortener
+    build-timeout-seconds: 600
+  policy:
+    allowed-group-ids:
+      - org.springframework.boot
+      - org.springframework
+      - com.h2database
+      - org.hibernate.validator
+      - jakarta.validation
+      - org.junit.jupiter
+      - org.mockito
+      - org.assertj
+      - org.apache.maven.plugins

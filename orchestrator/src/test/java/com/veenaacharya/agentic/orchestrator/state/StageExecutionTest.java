@@ -72,6 +72,63 @@ class StageExecutionTest {
     }
 
     @Test
+    void awaitingApprovalKeepsOutputButIsNotSatisfiedUntilApproved() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.start(T0);
+        execution.awaitApproval("plan");
+
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.AWAITING_APPROVAL);
+        assertThat(execution.getOutput()).isEqualTo("plan");
+        assertThat(execution.getFinishedAt()).isNull();
+        assertThat(execution.isSatisfied()).isFalse();
+        assertThat(execution.isDeadEnd()).isFalse();
+
+        execution.approve(T1);
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.SUCCEEDED);
+        assertThat(execution.getFinishedAt()).isEqualTo(T1);
+        assertThat(execution.isSatisfied()).isTrue();
+    }
+
+    @Test
+    void rejectedStageFailsWithReason() {
+        StageExecution execution = new StageExecution("run-1", "design");
+        execution.start(T0);
+        execution.awaitApproval("plan");
+        execution.reject("rejected by alice: too broad", T1);
+
+        assertThat(execution.getStatus()).isEqualTo(StageStatus.FAILED);
+        assertThat(execution.getError()).isEqualTo("rejected by alice: too broad");
+        assertThat(execution.isDeadEnd()).isTrue();
+    }
+
+    @Test
+    void approvalTransitionsRequireAwaitingState() {
+        StageExecution execution = new StageExecution("run-1", "design");
+
+        assertThatThrownBy(() -> execution.approve(T0))
+                .hasMessage("stage design must be AWAITING_APPROVAL but is PENDING");
+        assertThatThrownBy(() -> execution.reject("x", T0))
+                .hasMessage("stage design must be AWAITING_APPROVAL but is PENDING");
+        assertThatThrownBy(() -> execution.awaitApproval("out"))
+                .hasMessage("stage design must be RUNNING but is PENDING");
+    }
+
+    @Test
+    void approvalCanBeDecidedOnlyOnce() {
+        Approval approval = new Approval("run-1", "design", "design-and-schema", T0);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+
+        approval.approve("alice", "ok", T1);
+
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getDecidedBy()).isEqualTo("alice");
+        assertThat(approval.getRequestedAt()).isEqualTo(T0);
+        assertThat(approval.getDecidedAt()).isEqualTo(T1);
+        assertThatThrownBy(() -> approval.reject("bob", "no", T1))
+                .hasMessage("approval for stage design is already APPROVED");
+    }
+
+    @Test
     void workflowRunStartsPendingAndRecordsFinish() {
         WorkflowRun run = new WorkflowRun("greenfield", ChangeType.GREENFIELD, "build it", T0);
 

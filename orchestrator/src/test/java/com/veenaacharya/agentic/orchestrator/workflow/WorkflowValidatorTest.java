@@ -76,6 +76,16 @@ class WorkflowValidatorTest {
     }
 
     @Test
+    void rejectsUnknownStageKind() {
+        WorkflowDefinition workflow = new WorkflowDefinition("test", List.of(
+                new StageDefinition("a", List.of(), Set.of(), List.of(), null, "deploy")));
+
+        assertThatThrownBy(() -> validator.validate(workflow))
+                .isInstanceOf(WorkflowValidationException.class)
+                .hasMessage("stage 'a' has unknown kind 'deploy'");
+    }
+
+    @Test
     void rejectsEmptyWorkflow() {
         assertThatThrownBy(() -> validator.validate(new WorkflowDefinition("empty", List.of())))
                 .hasMessage("workflow has no stages");
