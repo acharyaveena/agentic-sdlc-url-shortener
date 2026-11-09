@@ -1,0 +1,22 @@
+# SDLC stage graph. Validated as a DAG at startup; a stage starts when all dependsOn stages
+# have succeeded or were skipped. Stages with more than one dependency are join points.
+name: sdlc
+stages:
+  - id: requirements
+  - id: impact-analysis
+    dependsOn: [requirements]
+    skipFor: [greenfield]
+  - id: design
+    dependsOn: [impact-analysis]
+  - id: code
+    dependsOn: [design]
+  - id: tests
+    dependsOn: [design]
+  - id: build-test
+    dependsOn: [code, tests]
+  - id: docs
+    dependsOn: [build-test]
+  - id: policy-scan
+    dependsOn: [build-test]
+  - id: release-readiness
+    dependsOn: [docs, policy-scan]

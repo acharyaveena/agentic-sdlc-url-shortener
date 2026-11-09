@@ -1,0 +1,14 @@
+spring:
+  main:
+    banner-mode: off
+  datasource:
+    # File-based so a paused run (e.g. waiting for approval) survives between CLI invocations.
+    url: jdbc:h2:file:./runs/orchestrator
+    username: sa
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+orchestrator:
+  workflow: workflow.yml
