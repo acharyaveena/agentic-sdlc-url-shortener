@@ -4,5 +4,7 @@ target/
 .vscode/
 .env
 *.log
+*.mv.db
+*.trace.db
 runs/
 !scenarios/**/*.log
