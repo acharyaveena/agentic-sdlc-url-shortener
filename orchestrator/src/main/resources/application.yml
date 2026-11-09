@@ -12,3 +12,12 @@ spring:
 
 orchestrator:
   workflow: workflow.yml
+  agent:
+    # mock needs no login; switch with --orchestrator.agent.mode=copilot
+    mode: mock
+    default-model: claude-sonnet-5.5
+    timeout-seconds: 300
+    models:
+      requirements: claude-opus-5.5
+      impact-analysis: claude-opus-5.5
+      design: claude-opus-5.5
