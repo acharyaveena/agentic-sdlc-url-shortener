@@ -11,8 +11,11 @@ class SecretScanRuleTest {
     private final SecretScanRule rule = new SecretScanRule();
 
     private List<Violation> scan(String content) {
-        return rule.check(List.of(new FileChange("url-shortener/src/main/A.java", content)),
-                new PolicyContext("code", Map.of()));
+        return scan("url-shortener/src/main/A.java", content);
+    }
+
+    private List<Violation> scan(String path, String content) {
+        return rule.check(List.of(new FileChange(path, content)), new PolicyContext("code", Map.of()));
     }
 
     // Test secrets are assembled at runtime so this file holds no literal that secret scanners would flag.
@@ -32,10 +35,33 @@ class SecretScanRuleTest {
     void detectsHardCodedCredentialsInCodeAndConfig() {
         assertThat(scan("String password = \"hunter2hunter2\";")).extracting(Violation::message)
                 .containsExactly("possible hard-coded credential on line 1");
-        assertThat(scan("spring.datasource.password=supersecret1")).extracting(Violation::message)
+        assertThat(scan("url-shortener/src/main/resources/application.properties",
+                "spring.datasource.password=supersecret1")).extracting(Violation::message)
                 .containsExactly("possible credential in config on line 1");
-        assertThat(scan("app:\n  api-key: abcdefgh12345")).extracting(Violation::message)
-                .containsExactly("possible credential in config on line 2");
+        assertThat(scan("url-shortener/src/main/resources/application.yml", "app:\n  api-key: abcdefgh12345"))
+                .extracting(Violation::message).containsExactly("possible credential in config on line 2");
+    }
+
+    @Test
+    void ordinaryJavaAssignmentsWithTokenLikeNamesAreNotCredentials() {
+        assertThat(scan("        tokens = capacity;")).isEmpty();
+        assertThat(scan("        double tokens = Math.min(capacity, tokens + refill);")).isEmpty();
+        assertThat(scan("    private final int secretLength = defaultLength;")).isEmpty();
+    }
+
+    @Test
+    void theSameLineInAConfigFileIsStillFlagged() {
+        for (String path : List.of("a.properties", "url-shortener/src/main/resources/application.yaml", "x/.env")) {
+            assertThat(scan(path, "api.token = abcdefgh12345")).as(path).hasSize(1);
+        }
+        assertThat(scan("url-shortener/pom.xml", "token = abcdefgh12345")).isEmpty();
+    }
+
+    @Test
+    void quotedCredentialsAreFlaggedInEveryKindOfFile() {
+        for (String path : List.of("A.java", "a.yml", "pom.xml", "README.md")) {
+            assertThat(scan(path, "password = \"hunter2hunter2\"")).as(path).hasSize(1);
+        }
     }
 
     @Test
@@ -52,10 +78,11 @@ class SecretScanRuleTest {
     @Test
     void ignoresPlaceholdersEmptyValuesAndPlainCode() {
         assertThat(scan("String password = \"\";")).isEmpty();
-        assertThat(scan("spring.datasource.password=${DB_PASSWORD}")).isEmpty();
-        assertThat(scan("password: ${DB_PASSWORD}")).isEmpty();
+        assertThat(scan("url-shortener/src/main/resources/application.properties",
+                "spring.datasource.password=${DB_PASSWORD}")).isEmpty();
+        assertThat(scan("a.yml", "password: ${DB_PASSWORD}")).isEmpty();
         assertThat(scan("String p = request.getPassword();")).isEmpty();
-        assertThat(scan("password=short")).isEmpty();
+        assertThat(scan("a.properties", "password=short")).isEmpty();
         assertThat(scan("// a link shortener with tokens of length seven")).isEmpty();
     }
 

@@ -2,12 +2,19 @@ package com.veenaacharya.agentic.orchestrator.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.veenaacharya.agentic.orchestrator.engine.StageContext;
+import com.veenaacharya.agentic.orchestrator.policy.FileChange;
+import com.veenaacharya.agentic.orchestrator.policy.PolicyContext;
+import com.veenaacharya.agentic.orchestrator.policy.WritePathRule;
 import com.veenaacharya.agentic.orchestrator.workflow.ChangeType;
 import com.veenaacharya.agentic.orchestrator.workflow.StageDefinition;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowDefinition;
 import com.veenaacharya.agentic.orchestrator.workflow.WorkflowLoader;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -92,6 +99,23 @@ class PromptBuilderTest {
         assertThat(prompt).contains("x".repeat(PromptBuilder.MAX_FEEDBACK_CHARS) + "\n[truncated]")
                 .doesNotContain("x".repeat(PromptBuilder.MAX_FEEDBACK_CHARS + 1));
         assertThat(builder.build(context("code", Map.of()).forAttempt(null, "y")).model()).isEqualTo("sonnet");
+    }
+
+    @Test
+    void codePromptAsksForThePomWithTheRealParentCoordinatesSoTheDesignedDependenciesCanBeBuilt() throws IOException {
+        String prompt = builder.build(context("code", Map.of())).systemPrompt();
+
+        assertThat(prompt).contains("`url-shortener/pom.xml`", "<artifactId>url-shortener</artifactId>");
+        // The prompt may only ask for what the write-path policy lets the code stage write.
+        assertThat(new WritePathRule().check(List.of(new FileChange("url-shortener/pom.xml", "x")),
+                new PolicyContext("code", Map.of()))).isEmpty();
+
+        Path rootPom = Path.of("..", "pom.xml");
+        assumeTrue(Files.exists(rootPom), "root pom not reachable from this working directory");
+        String pom = Files.readString(rootPom);
+        String artifactId = pom.replaceFirst("(?s).*?</parent>\\s*<groupId>[^<]+</groupId>\\s*<artifactId>([^<]+)</artifactId>.*", "$1");
+        String version = pom.replaceFirst("(?s).*?</parent>.*?<version>([^<]+)</version>.*", "$1");
+        assertThat(prompt).contains("<artifactId>" + artifactId + "</artifactId>", "<version>" + version + "</version>");
     }
 
     @Test
