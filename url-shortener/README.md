@@ -10,6 +10,12 @@ run's code and tests stages produced structurally broken output (wrong package, 
 constraints in files they rewrote), so the feature was integrated by hand into the real files instead. See
 `scenarios/brownfield/` for the full run evidence and `scenarios/brownfield/walkthrough.md` for why.
 
+Per-link click analytics (referrer/user-agent breakdown, daily series) were added after that from a
+deliberately vague request ("make analytics better"). That run's design was rejected and re-planned once
+before approval; the code stage then built a different, less consistent integration than what was approved
+and had a real bug (a wrong column name), so this feature was also integrated by hand. See
+`scenarios/ambiguous-analytics/` for the full run evidence.
+
 ## Run it
 
 ```bash
@@ -25,6 +31,7 @@ The service listens on port 8080 and stores data in `url-shortener/data/urlshort
 | `POST` | `/api/v1/links` | Create a short link for a long URL |
 | `GET` | `/{code}` | Redirect to the original URL and count the click |
 | `GET` | `/api/v1/links/{code}/stats` | Get a link's click count and metadata |
+| `GET` | `/api/v1/links/{code}/analytics` | Get per-link click analytics for a UTC date range |
 
 The full contract is in [`src/main/resources/openapi.yaml`](src/main/resources/openapi.yaml).
 
@@ -65,6 +72,31 @@ curl http://localhost:8080/api/v1/links/aB3xQ9z/stats
 {"code":"aB3xQ9z","longUrl":"https://example.com/some/page","clickCount":1,"createdAt":"2026-01-01T00:00:00Z"}
 ```
 
+### Read analytics
+
+`from`/`to` are optional ISO dates (UTC, inclusive); they default to the last `app.analytics.default-range-days`
+days ending today. `excludeBots` (default `false`) filters out clicks classified as bots. History starts
+from when this feature was deployed and can differ from the all-time `clickCount` above. No IP address,
+full user-agent string or full referrer URL is ever stored — only a coarse user-agent category
+(`BROWSER`/`BOT`/`OTHER`) and the referrer's host.
+
+```bash
+curl "http://localhost:8080/api/v1/links/aB3xQ9z/analytics?from=2026-01-01&to=2026-01-03"
+```
+
+```json
+{
+  "code": "aB3xQ9z",
+  "from": "2026-01-01",
+  "to": "2026-01-03",
+  "excludeBots": false,
+  "totalClicks": 5,
+  "daily": [{"date":"2026-01-01","clicks":3},{"date":"2026-01-02","clicks":0},{"date":"2026-01-03","clicks":2}],
+  "topReferrers": [{"host":"a.com","clicks":2}],
+  "userAgents": {"BROWSER": 4, "BOT": 1, "OTHER": 0}
+}
+```
+
 ### Errors
 
 All errors are `application/problem+json` (RFC 7807), for example:
@@ -75,7 +107,7 @@ All errors are `application/problem+json` (RFC 7807), for example:
 
 | Status | When |
 |---|---|
-| 400 | Malformed or blocked URL (blocked schemes, length, self-reference, invalid JSON), or `ttlSeconds` out of range |
+| 400 | Malformed or blocked URL (blocked schemes, length, self-reference, invalid JSON), `ttlSeconds` out of range, or an invalid analytics date range |
 | 404 | Unknown short code |
 | 410 | Link has passed its `expiresAt` |
 | 429 | Rate limit exceeded (`Retry-After` header included) |
@@ -97,10 +129,14 @@ All settings are under the `app.*` prefix in [`src/main/resources/application.ym
 | `app.link.default-ttl` | `P30D` | Time-to-live applied when a create request omits `ttlSeconds` |
 | `app.link.cleanup-interval` | `PT1H` | How often the expired-link cleanup job runs |
 | `app.link.cleanup-grace` | `P7D` | How long an expired link is kept (for stats/audit) before cleanup deletes it |
+| `app.analytics.default-range-days` | 30 | Days covered by `/analytics` when `from`/`to` are omitted |
+| `app.analytics.max-range-days` | 366 | Largest allowed `from`-`to` span before a 400 |
+| `app.analytics.top-referrers-limit` | 10 | Maximum number of referrer hosts returned |
 
 Rate limiting applies only to `POST /api/v1/links`, by remote address (no proxy headers are trusted). The
 cleanup job only deletes rows whose `expires_at` is non-null and older than the grace period; links with
-no expiry are never touched.
+no expiry are never touched. Click events are recorded in the same database transaction as the click
+counter increment, so a failure to record an event fails the redirect rather than silently losing data.
 
 ## Known limitations
 
@@ -116,5 +152,5 @@ no expiry are never touched.
 ./mvnw -pl url-shortener verify
 ```
 
-94 tests (unit and integration) pass, including concurrent-redirect, rate-limit and link-expiry
-integration tests against a real (in-memory) H2 database with a fixed clock.
+162 tests (unit and integration) pass, including concurrent-redirect, rate-limit, link-expiry and
+link-analytics integration tests against a real (in-memory) H2 database with a fixed clock.

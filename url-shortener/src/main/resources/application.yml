@@ -26,3 +26,7 @@ app:
     default-ttl: P30D
     cleanup-interval: PT1H
     cleanup-grace: P7D
+  analytics:
+    default-range-days: 30
+    max-range-days: 366
+    top-referrers-limit: 10

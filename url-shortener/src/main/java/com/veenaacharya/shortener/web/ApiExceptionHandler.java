@@ -1,5 +1,6 @@
 package com.veenaacharya.shortener.web;
 
+import com.veenaacharya.shortener.analytics.InvalidAnalyticsRangeException;
 import com.veenaacharya.shortener.link.CodeGenerationExhaustedException;
 import com.veenaacharya.shortener.link.LinkExpiredException;
 import com.veenaacharya.shortener.link.LinkNotFoundException;
@@ -41,6 +42,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(CodeGenerationExhaustedException.class)
     public ResponseEntity<ProblemDetail> handleExhausted(CodeGenerationExhaustedException e) {
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "Short code unavailable", e.getMessage(), null);
+    }
+
+    @ExceptionHandler(InvalidAnalyticsRangeException.class)
+    public ResponseEntity<ProblemDetail> handleInvalidAnalyticsRange(InvalidAnalyticsRangeException e) {
+        return problem(HttpStatus.BAD_REQUEST, "Invalid analytics range", e.getMessage(), null);
     }
 
     private static ResponseEntity<ProblemDetail> problem(HttpStatus status, String title, String detail,

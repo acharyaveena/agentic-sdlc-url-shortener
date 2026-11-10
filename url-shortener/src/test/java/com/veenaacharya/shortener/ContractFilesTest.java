@@ -31,7 +31,8 @@ class ContractFilesTest {
         Map<String, Object> spec = openApi();
         Map<String, Object> paths = (Map<String, Object>) spec.get("paths");
 
-        assertThat(paths).containsKeys("/api/v1/links", "/api/v1/links/{code}/stats", "/{code}");
+        assertThat(paths).containsKeys("/api/v1/links", "/api/v1/links/{code}/stats", "/{code}",
+                "/api/v1/links/{code}/analytics");
 
         assertThat(responses(paths, "/api/v1/links", "post").keySet().stream().map(String::valueOf))
                 .contains("201", "400", "429", "503");
@@ -39,6 +40,8 @@ class ContractFilesTest {
                 .contains("200", "404");
         assertThat(responses(paths, "/{code}", "get").keySet().stream().map(String::valueOf))
                 .contains("302", "404", "410");
+        assertThat(responses(paths, "/api/v1/links/{code}/analytics", "get").keySet().stream().map(String::valueOf))
+                .contains("200", "400", "404");
     }
 
     @Test
@@ -47,7 +50,8 @@ class ContractFilesTest {
         Map<String, Object> components = (Map<String, Object>) openApi().get("components");
         Map<String, Object> schemas = (Map<String, Object>) components.get("schemas");
 
-        assertThat(schemas).containsKeys("CreateLinkRequest", "LinkResponse", "LinkStats", "ProblemDetail");
+        assertThat(schemas).containsKeys("CreateLinkRequest", "LinkResponse", "LinkStats", "ProblemDetail",
+                "LinkAnalyticsResponse");
     }
 
     @Test
