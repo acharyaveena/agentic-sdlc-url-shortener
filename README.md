@@ -1,97 +1,71 @@
-# agentic-sdlc-url-shortener
+# Agentic SDLC orchestrator and URL shortener
 
-A governed agentic SDLC orchestrator, demonstrated by having it build and evolve a URL shortener.
+An orchestrator that turns a plain-English change request into reviewed, tested code. It runs AI agents through a governed software lifecycle. The product it builds is a URL shortener.
 
-Two Maven modules:
+## What's in the repo
 
-- **`orchestrator/`** — the agentic orchestrator. Takes a natural-language change request and runs it
-  through a staged workflow (requirements → impact analysis → design → code/tests → build+test →
-  docs/policy-scan → release readiness), calling an LLM for each stage, enforcing human approval gates,
-  policy guardrails, bounded retries with fallback and rollback, and producing an audit trail and
-  reliability metrics.
-- **`url-shortener/`** — the product the orchestrator builds and modifies: a Spring Boot + Spring Data JDBC
-  URL shortener with create/redirect/stats APIs, collision handling, rate limiting, link expiry, and
-  per-link click analytics.
+| Folder | What it is |
+|---|---|
+| `orchestrator/` | The workflow engine. Runs agents through requirements, design, code, tests, build, docs and release, with human approvals. |
+| `url-shortener/` | The product. A Spring Boot service with short links, redirects, stats, expiry and analytics. |
+| `scenarios/` | Evidence from three live runs against real Copilot models. |
+| `docs/` | Architecture, setup, testing, risks and summary. |
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the orchestrator works,
-[`docs/SETUP.md`](docs/SETUP.md) to build and run it, [`docs/TESTING.md`](docs/TESTING.md) for the test
-approach, [`docs/RISKS.md`](docs/RISKS.md) for known risks and limitations, and
-[`docs/SUMMARY.md`](docs/SUMMARY.md) for the final engineering summary.
+## How the two parts fit together
+
+- You give the orchestrator a request, such as "add link expiry".
+- It plans the change and writes code into `url-shortener/`.
+- It builds and tests that code, and asks a human to approve key steps.
+- The `url-shortener/` code in this repo came from three live runs. A human reviewed and fixed it before merge.
+- The quick demo uses a mock AI. It shows the full workflow but writes only a small placeholder class.
 
 ## Quick start
 
-```bash
-# Prerequisites: JDK 21, the bundled Maven wrapper (no local Maven install needed)
+You need JDK 21 or newer and Git. No AI login is needed.
+
+**Windows PowerShell**
+
+```powershell
+$env:JAVA_HOME = "C:\path\to\your\jdk"
 ./mvnw verify
 ```
 
-That builds and tests both modules: 283 orchestrator tests and 162 url-shortener tests, all without any
-external dependency — the orchestrator defaults to a mock agent runtime that needs no AI provider login.
-
-To run the real `url-shortener` service standalone:
+**macOS or Linux**
 
 ```bash
-./mvnw -pl url-shortener spring-boot:run
-# listens on :8080; see url-shortener/README.md for the API
+export JAVA_HOME=/path/to/your/jdk
+./mvnw verify
 ```
 
-To run the orchestrator against a real request (mock mode, no login required):
+You should see `BUILD SUCCESS`, with 283 orchestrator tests and 162 url-shortener tests.
 
-```bash
-cd orchestrator
-../mvnw package -DskipTests
-java -jar target/orchestrator-0.1.0-SNAPSHOT.jar \
-  --scenario=demo --change-type=greenfield \
-  --request="Build a URL shortener with create, redirect, and click counting."
-```
+Then try it out:
 
-This prints the run id and pauses at the first approval gate. Full CLI usage, how to switch to a real
-Copilot-backed run, and how to drive a run through approval/rejection/re-plan/export are in
-[`docs/SETUP.md`](docs/SETUP.md).
+- [Run the orchestrator demo](docs/SETUP.md#run-the-orchestrator-demo)
+- [Run the URL shortener](docs/SETUP.md#run-the-url-shortener)
 
-## Scenario evidence
+## The three scenarios
 
-Three full scenarios were run end-to-end through the live orchestrator (against the real GitHub Copilot
-SDK, not the mock runtime) and are preserved as evidence under [`scenarios/`](scenarios/):
-
-| Scenario | Evidence | What it demonstrates |
+| Scenario | Request | What happened |
 |---|---|---|
-| Greenfield | [`scenarios/greenfield/`](scenarios/greenfield/) | Building the shortener from an empty module. Needed three live runs (two safe-stopped on real build failures) before a human-reviewed recovery produced a 82-test-green build. |
-| Brownfield | [`scenarios/brownfield/`](scenarios/brownfield/) | Adding link expiry to the existing shortener. Impact analysis and a twice-re-planned design were accurate, but the code/tests stages produced structurally broken output (wrong package, corrupted `pom.xml`/`schema.sql`) that required a full manual recovery. |
-| Ambiguous | [`scenarios/ambiguous-analytics/`](scenarios/ambiguous-analytics/) | "Make analytics better" — a deliberately vague request. Requirements listed 10 ambiguities with stated assumptions; the first design was rejected and re-planned; the code stage then silently deviated from its own *approved* design while still reporting success. |
+| [Greenfield](scenarios/greenfield/walkthrough.md) | Build the shortener from scratch | Three runs, each stopped safely on a real build failure. A human fixed the third. |
+| [Brownfield](scenarios/brownfield/walkthrough.md) | Add link expiry | The design was re-planned twice. Generated code damaged existing files, so a human rebuilt the feature. |
+| [Ambiguous](scenarios/ambiguous-analytics/walkthrough.md) | "Make analytics better" | Ten ambiguities listed. The design was rejected and re-planned. The code then ignored the approved design. |
 
-Each scenario's `walkthrough.md` is the best single entry point — it narrates the run end to end, including
-what went wrong and why. The cumulative risk findings across all three are consolidated in
-[`docs/RISKS.md`](docs/RISKS.md).
+## Documentation
 
-## Repository layout
+| Doc | Covers |
+|---|---|
+| [ARCHITECTURE](docs/ARCHITECTURE.md) | Components, stage graph, control flow and key decisions |
+| [SETUP](docs/SETUP.md) | Build, run and CLI commands |
+| [TESTING](docs/TESTING.md) | Test approach and coverage |
+| [RISKS](docs/RISKS.md) | Findings, trade-offs, guardrails and limitations |
+| [SUMMARY](docs/SUMMARY.md) | Plan, results, assumptions and limitations |
 
-```
-orchestrator/        agentic SDLC orchestrator (primary focus)
-  src/main/java/.../workflow      stage graph definition and DAG validation
-  src/main/java/.../engine        the engine that runs stages against the graph
-  src/main/java/.../agent         AgentRuntime abstraction (mock + real Copilot SDK)
-  src/main/java/.../gate          approval gates
-  src/main/java/.../policy        PolicyGuard rules (secrets, dependencies, schema, write-path)
-  src/main/java/.../recovery      bounded retries, fallback model, git rollback, safe-stop
-  src/main/java/.../replan        re-planning a stage, staleness propagation
-  src/main/java/.../state         persisted run/stage/approval/decision entities (H2)
-  src/main/java/.../audit         JSON-lines audit log
-  src/main/java/.../metrics       reliability metrics
-  src/main/java/.../workspace     git branch/commit management, build/policy-scan execution
-  src/main/java/.../cli           command-line entry point
-  src/main/resources/workflow.yml the stage graph
-  src/main/resources/prompts/     per-stage system prompts
-url-shortener/        the product the orchestrator builds and modifies
-scenarios/            evidence from the three live scenario runs
-docs/                 architecture, setup, testing, risks, summary
-```
+## Ground rules
 
-## Working rules this project followed
-
-- Agents may only write inside `url-shortener/`; anything touching schema, public API, dependencies or
-  release requires a human approval, enforced by `PolicyGuard`.
-- One git branch per orchestrator run (`agent/<scenario>-<run-id>`), one commit per stage, failed runs
-  preserved at an `agent-failed/<run-id>` tag rather than discarded.
-- Humans own final quality: every scenario's generated code was reviewed, and where it was broken, fixed
-  with a `fix(human-review): ...` commit under a real identity — never silently accepted.
+- Agents may only write inside `url-shortener/`.
+- Schema, API, dependency and release changes need human approval.
+- Each run gets its own git branch, with one commit per stage.
+- Failed runs are tagged and kept, not deleted.
+- A human reviews every change before it is merged.
