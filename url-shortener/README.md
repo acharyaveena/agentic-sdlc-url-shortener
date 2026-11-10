@@ -1,84 +1,85 @@
-# url-shortener
+# URL shortener
 
-A URL shortener service (Java 21, Spring Boot 3.3, Spring Data JDBC, H2). Built by the agentic orchestrator
-from a natural-language request; the generated code failed its first automated build (a constructor
-mismatch between the code and tests stages), was recovered from the orchestrator's preserved failed-state
-tag, and fixed by a human reviewer. See `scenarios/greenfield/` for the full run evidence.
+A Spring Boot 3.3 service on Java 21, using Spring Data JDBC and H2.
 
-Link expiry (TTL, 410 Gone, scheduled cleanup) was added afterwards as a brownfield change request. That
-run's code and tests stages produced structurally broken output (wrong package, dropped dependencies and
-constraints in files they rewrote), so the feature was integrated by hand into the real files instead. See
-`scenarios/brownfield/` for the full run evidence and `scenarios/brownfield/walkthrough.md` for why.
+## Features
 
-Per-link click analytics (referrer/user-agent breakdown, daily series) were added after that from a
-deliberately vague request ("make analytics better"). That run's design was rejected and re-planned once
-before approval; the code stage then built a different, less consistent integration than what was approved
-and had a real bug (a wrong column name), so this feature was also integrated by hand. See
-`scenarios/ambiguous-analytics/` for the full run evidence.
+- Create short links for http and https URLs
+- Redirect and count clicks
+- Click stats per link
+- Link expiry, with `410 Gone` and a cleanup job
+- Per-link analytics: daily clicks, top referrer hosts, browser or bot
+- Collision-safe short codes
+- Rate limiting on link creation
+
+## How it was built
+
+| Feature | Scenario | Result |
+|---|---|---|
+| Core service | [Greenfield](../scenarios/greenfield/walkthrough.md) | Third live run recovered and fixed by a human |
+| Link expiry | [Brownfield](../scenarios/brownfield/walkthrough.md) | Generated code was broken, so the feature was rebuilt by hand |
+| Analytics | [Ambiguous](../scenarios/ambiguous-analytics/walkthrough.md) | Generated code ignored the design, so the integration was rebuilt by hand |
 
 ## Run it
+
+From the repo root:
 
 ```bash
 ./mvnw -pl url-shortener spring-boot:run
 ```
 
-The service listens on port 8080 and stores data in `url-shortener/data/urlshortener.mv.db` (H2 file mode).
+- Runs on `http://localhost:8080`.
+- Stores data in `url-shortener/data/` (H2 file mode).
+- Step-by-step commands for Windows and macOS/Linux are in [docs/SETUP.md](../docs/SETUP.md#run-the-url-shortener).
 
 ## API
 
-| Method | Path | Purpose |
+| Method | Path | Does |
 |---|---|---|
-| `POST` | `/api/v1/links` | Create a short link for a long URL |
-| `GET` | `/{code}` | Redirect to the original URL and count the click |
-| `GET` | `/api/v1/links/{code}/stats` | Get a link's click count and metadata |
-| `GET` | `/api/v1/links/{code}/analytics` | Get per-link click analytics for a UTC date range |
+| `POST` | `/api/v1/links` | Create a short link |
+| `GET` | `/{code}` | Redirect and count the click |
+| `GET` | `/api/v1/links/{code}/stats` | Click count and metadata |
+| `GET` | `/api/v1/links/{code}/analytics` | Daily clicks, referrers and user agents |
 
-The full contract is in [`src/main/resources/openapi.yaml`](src/main/resources/openapi.yaml).
+The full contract is in [openapi.yaml](src/main/resources/openapi.yaml).
 
 ### Create a link
 
-`ttlSeconds` is optional (60 to 31536000); it defaults to `app.link.default-ttl` when omitted.
-
 ```bash
-curl -i -X POST http://localhost:8080/api/v1/links \
+curl -X POST http://localhost:8080/api/v1/links \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com/some/page","ttlSeconds":3600}'
+  -d '{"url":"https://example.com/page","ttlSeconds":3600}'
 ```
 
-```http
-HTTP/1.1 201 Created
-Location: http://localhost:8080/aB3xQ9z
-
-{"code":"aB3xQ9z","shortUrl":"http://localhost:8080/aB3xQ9z","longUrl":"https://example.com/some/page","createdAt":"2026-01-01T00:00:00Z","expiresAt":"2026-01-01T01:00:00Z"}
+```json
+{"code":"aB3xQ9z","shortUrl":"http://localhost:8080/aB3xQ9z","longUrl":"https://example.com/page","createdAt":"2026-01-01T00:00:00Z","expiresAt":"2026-01-01T01:00:00Z"}
 ```
 
-### Visit a short link
+- `ttlSeconds` is optional, from 60 to 31536000.
+- Without it, links expire after 30 days.
+
+### Visit a link
 
 ```bash
 curl -i http://localhost:8080/aB3xQ9z
 ```
 
-Returns `302 Found` with a `Location` header, and increments that link's click count by one. Once the link
-has passed its `expiresAt`, the same request returns `410 Gone` instead, and the click is not counted.
-Links created before this feature existed (or with no TTL ever set) have `expiresAt: null` and never expire.
+- Returns `302` with the original URL in `Location`.
+- Adds one click.
+- After the link expires it returns `410` and does not count the click.
+- Links with no expiry date never expire.
 
-### Read stats
+### Stats
 
 ```bash
 curl http://localhost:8080/api/v1/links/aB3xQ9z/stats
 ```
 
 ```json
-{"code":"aB3xQ9z","longUrl":"https://example.com/some/page","clickCount":1,"createdAt":"2026-01-01T00:00:00Z"}
+{"code":"aB3xQ9z","longUrl":"https://example.com/page","clickCount":1,"createdAt":"2026-01-01T00:00:00Z"}
 ```
 
-### Read analytics
-
-`from`/`to` are optional ISO dates (UTC, inclusive); they default to the last `app.analytics.default-range-days`
-days ending today. `excludeBots` (default `false`) filters out clicks classified as bots. History starts
-from when this feature was deployed and can differ from the all-time `clickCount` above. No IP address,
-full user-agent string or full referrer URL is ever stored — only a coarse user-agent category
-(`BROWSER`/`BOT`/`OTHER`) and the referrer's host.
+### Analytics
 
 ```bash
 curl "http://localhost:8080/api/v1/links/aB3xQ9z/analytics?from=2026-01-01&to=2026-01-03"
@@ -97,9 +98,14 @@ curl "http://localhost:8080/api/v1/links/aB3xQ9z/analytics?from=2026-01-01&to=20
 }
 ```
 
+- `from` and `to` are optional UTC dates. They default to the last 30 days.
+- `excludeBots=true` leaves out bot clicks.
+- Only the referrer host and a user agent category are stored. No IP address, full URL or full user agent.
+- Analytics start from when the feature was deployed, so totals can be lower than `clickCount`.
+
 ### Errors
 
-All errors are `application/problem+json` (RFC 7807), for example:
+All errors use `application/problem+json`.
 
 ```json
 {"type":"about:blank","title":"Invalid URL","status":400,"detail":"scheme must be http or https"}
@@ -107,50 +113,49 @@ All errors are `application/problem+json` (RFC 7807), for example:
 
 | Status | When |
 |---|---|
-| 400 | Malformed or blocked URL (blocked schemes, length, self-reference, invalid JSON), `ttlSeconds` out of range, or an invalid analytics date range |
-| 404 | Unknown short code |
-| 410 | Link has passed its `expiresAt` |
-| 429 | Rate limit exceeded (`Retry-After` header included) |
-| 503 | No unique short code found after `app.max-code-attempts` tries |
+| 400 | Bad URL, bad JSON, `ttlSeconds` out of range, or bad analytics dates |
+| 404 | Unknown code |
+| 410 | Link has expired |
+| 429 | Too many creates. Includes a `Retry-After` header. |
+| 503 | No free short code after 5 tries |
 
 ## Configuration
 
-All settings are under the `app.*` prefix in [`src/main/resources/application.yml`](src/main/resources/application.yml):
+Settings live in [application.yml](src/main/resources/application.yml) under `app`.
 
 | Property | Default | Meaning |
 |---|---|---|
-| `app.base-url` | `http://localhost:8080` | Host used to build `shortUrl` and to detect self-referencing links |
-| `app.blocked-hosts` | `localhost, 127.0.0.1, ::1` | Hosts a submitted URL may not point to |
-| `app.max-url-length` | 2048 | Maximum accepted URL length |
-| `app.code-length` | 7 | Length of generated short codes (Base62) |
-| `app.max-code-attempts` | 5 | Collision retries before returning 503 |
-| `app.rate-limit.requests` | 10 | Link creations allowed per client per window |
-| `app.rate-limit.window` | `PT1M` | Rate-limit window (ISO-8601 duration) |
-| `app.link.default-ttl` | `P30D` | Time-to-live applied when a create request omits `ttlSeconds` |
-| `app.link.cleanup-interval` | `PT1H` | How often the expired-link cleanup job runs |
-| `app.link.cleanup-grace` | `P7D` | How long an expired link is kept (for stats/audit) before cleanup deletes it |
-| `app.analytics.default-range-days` | 30 | Days covered by `/analytics` when `from`/`to` are omitted |
-| `app.analytics.max-range-days` | 366 | Largest allowed `from`-`to` span before a 400 |
-| `app.analytics.top-referrers-limit` | 10 | Maximum number of referrer hosts returned |
+| `app.base-url` | `http://localhost:8080` | Used to build `shortUrl` and block self-links |
+| `app.blocked-hosts` | `localhost, 127.0.0.1, ::1` | Hosts a URL may not point to |
+| `app.max-url-length` | 2048 | Longest accepted URL |
+| `app.code-length` | 7 | Short code length |
+| `app.max-code-attempts` | 5 | Tries before returning 503 |
+| `app.rate-limit.requests` | 10 | Creates allowed per client per window |
+| `app.rate-limit.window` | `PT1M` | Rate limit window |
+| `app.link.default-ttl` | `P30D` | Expiry when `ttlSeconds` is not given |
+| `app.link.cleanup-interval` | `PT1H` | How often expired links are cleaned up |
+| `app.link.cleanup-grace` | `P7D` | How long an expired link is kept before deletion |
+| `app.analytics.default-range-days` | 30 | Default analytics range |
+| `app.analytics.max-range-days` | 366 | Longest allowed range |
+| `app.analytics.top-referrers-limit` | 10 | Referrer hosts returned |
 
-Rate limiting applies only to `POST /api/v1/links`, by remote address (no proxy headers are trusted). The
-cleanup job only deletes rows whose `expires_at` is non-null and older than the grace period; links with
-no expiry are never touched. Click events are recorded in the same database transaction as the click
-counter increment, so a failure to record an event fails the redirect rather than silently losing data.
+## Behavior notes
 
-## Known limitations
+- Rate limiting applies only to creating links. It is keyed by client address.
+- Cleanup deletes only links that expired more than the grace period ago.
+- A click and its analytics event are saved in one transaction. If either fails, the redirect fails.
 
-- The rate limiter is in-memory and per-instance; it does not work across multiple instances.
-- Self-reference checks use exact host matching only: no DNS resolution, so a hostname that resolves to a
-  blocked IP is not caught.
-- There is no authentication; link creation, redirects and stats are all open.
-- H2 is file-based by default and is not intended for production use as-is.
+## Limitations
 
-## Build and test
+- The rate limiter is in memory and per instance.
+- There is no authentication.
+- H2 is not meant for production.
+- Self-link checks match exact hosts, without DNS lookups.
+
+## Tests
 
 ```bash
 ./mvnw -pl url-shortener verify
 ```
 
-162 tests (unit and integration) pass, including concurrent-redirect, rate-limit, link-expiry and
-link-analytics integration tests against a real (in-memory) H2 database with a fixed clock.
+162 unit and integration tests run against in-memory H2. See [docs/TESTING.md](../docs/TESTING.md).

@@ -2,123 +2,216 @@
 
 ## Prerequisites
 
-- **JDK 21.** The Maven wrapper (`./mvnw`) is checked in, so no separate Maven install is needed — only a
-  JDK. Set `JAVA_HOME` to it before running anything.
-- **Git**, with the repository already cloned (the orchestrator shells out to `git` for branch/commit
-  operations and to discover the repository root via `git rev-parse --show-toplevel`).
-- **For live (non-mock) orchestrator runs only:** a GitHub Copilot CLI login (`copilot login`) and the
-  `com.github:copilot-sdk-java` dependency's platform-specific runtime jar (the root `pom.xml` activates a
-  `runtime-windows`/equivalent profile automatically based on your OS). No login or network access is
-  needed for anything else — building, testing, and mock-mode orchestrator runs all work offline.
+- JDK 21 or newer
+- Git
+- Nothing else. The Maven wrapper (`./mvnw`) is included.
+- A GitHub Copilot login only if you want live AI runs. See [live mode](#live-mode-with-copilot).
 
-## Build everything
+## 1. Set JAVA_HOME
+
+Do this in every new terminal.
+
+**Windows PowerShell**
+
+```powershell
+$env:JAVA_HOME = "C:\path\to\your\jdk"
+```
+
+**macOS or Linux**
+
+```bash
+export JAVA_HOME=/path/to/your/jdk
+```
+
+## 2. Build and test
+
+From the repo root:
 
 ```bash
 ./mvnw verify
 ```
 
-Builds both modules and runs the full test suite: 283 orchestrator tests, 162 `url-shortener` tests, no
-external dependency required.
+- You should see `BUILD SUCCESS`.
+- 283 orchestrator tests and 162 url-shortener tests run.
+- On Windows the exit code may show 1 even on success. Trust the `BUILD SUCCESS` line.
 
-> **Windows PowerShell note:** `./mvnw ...` can report a non-zero exit code even when Maven printed
-> `BUILD SUCCESS`, because of harmless stderr JVM warnings (native-access, deprecated API). Check the
-> printed `BUILD SUCCESS`/`BUILD FAILURE` text, not the shell exit code.
+## Run the orchestrator demo
 
-## Run `url-shortener` standalone
+The demo uses a mock AI, so no login is needed. It runs every stage, including a real Maven build.
+
+### Start a run
+
+**Windows PowerShell**
+
+```powershell
+./mvnw -pl orchestrator -am package -DskipTests
+cd orchestrator
+$java = "$env:JAVA_HOME\bin\java.exe"
+$jar = "target/orchestrator-0.1.0-SNAPSHOT.jar"
+& $java -jar $jar --scenario=demo --change-type=greenfield --request="Build a URL shortener with create, redirect and click counting." --orchestrator.approval.auto-approve=true
+```
+
+**macOS or Linux**
+
+```bash
+./mvnw -pl orchestrator -am package -DskipTests
+cd orchestrator
+java="$JAVA_HOME/bin/java"
+jar=target/orchestrator-0.1.0-SNAPSHOT.jar
+"$java" -jar $jar --scenario=demo --change-type=greenfield \
+  --request="Build a URL shortener with create, redirect and click counting." \
+  --orchestrator.approval.auto-approve=true
+```
+
+- Run orchestrator commands from inside the `orchestrator` folder.
+- `auto-approve` approves requirements and design for you. It works only in mock mode.
+- Leave it out to approve each gate yourself. The run then pauses and prints the approve command.
+
+### What you should see
+
+```text
+Run 5bcdcfe2-277a-424c-918f-7394e587e758 (demo, greenfield): AWAITING_APPROVAL
+  requirements       SUCCEEDED
+  impact-analysis    SKIPPED
+  design             SUCCEEDED
+  code               SUCCEEDED
+  tests              SUCCEEDED
+  build-test         SUCCEEDED
+  docs               SUCCEEDED
+  policy-scan        SUCCEEDED
+  release-readiness  AWAITING_APPROVAL
+```
+
+- The long id on the first line is the **run id**. Copy all of it.
+- Release always needs a human, so the run stops there.
+
+### Approve the release
+
+**Windows PowerShell**
+
+```powershell
+$run = "paste-the-run-id-here"
+& $java -jar $jar --approve=${run}:release-readiness --actor=reviewer
+```
+
+**macOS or Linux**
+
+```bash
+run=paste-the-run-id-here
+"$java" -jar $jar --approve=$run:release-readiness --actor=reviewer
+```
+
+The last line should read `Run <run-id> (demo, greenfield): SUCCEEDED`.
+
+### Look at the results
+
+| Command | Shows |
+|---|---|
+| `--metrics=<run-id>` | Success rate, retries, rollbacks, MTTR and latency |
+| `--status=<run-id>` | Each stage and its approvals |
+| `--lineage=<run-id>` | Output hashes for each stage revision |
+
+- Use them the same way as `--approve`, for example `& $java -jar $jar --metrics=$run`.
+- Stage outputs are in `orchestrator/runs/<run-id>/`.
+- The audit log is in `orchestrator/runs/audit/<run-id>.jsonl`.
+- `git branch --list "agent/*"` shows the run's branch, with one commit per stage.
+
+Lost the run id? List the run folders and pick the newest:
+
+```powershell
+Get-ChildItem runs -Directory | Where-Object Name -ne "audit" | Sort-Object LastWriteTime
+```
+
+## Run the URL shortener
+
+You need two terminals: one for the server and one to call it.
+
+### Terminal 1: start the server
+
+From the repo root:
 
 ```bash
 ./mvnw -pl url-shortener spring-boot:run
 ```
 
-Listens on `:8080`, stores data in `url-shortener/data/urlshortener.mv.db` (H2 file mode). See
-[`url-shortener/README.md`](../url-shortener/README.md) for the full API.
+Wait for `Started UrlShortenerApplication`. The server runs on `http://localhost:8080`. Press `Ctrl+C` to stop it.
 
-## Run the orchestrator
+### Terminal 2: try the API
 
-The CLI is one Spring Boot application; every subcommand is a separate process invocation (state persists
-to a local file-based H2 database at `orchestrator/runs/orchestrator.mv.db`, so a paused run survives
-between commands). Build the jar once, then invoke it from inside `orchestrator/` (the datasource path is
-relative to the process's working directory, while the exported-evidence path is resolved against the git
-repository root regardless of working directory):
+**Windows PowerShell**
+
+```powershell
+$link = Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/links -ContentType "application/json" -Body '{"url":"https://example.com/hello"}'
+$code = $link.code
+curl.exe -i -H "User-Agent: Mozilla/5.0" -H "Referer: https://news.example.org/post" http://localhost:8080/$code
+Invoke-RestMethod http://localhost:8080/api/v1/links/$code/stats
+Invoke-RestMethod http://localhost:8080/api/v1/links/$code/analytics
+curl.exe -i http://localhost:8080/zzNoSuch9
+```
+
+**macOS or Linux**
 
 ```bash
-cd orchestrator
-../mvnw package -DskipTests
-java -jar target/orchestrator-0.1.0-SNAPSHOT.jar <args>
+curl -X POST http://localhost:8080/api/v1/links -H 'Content-Type: application/json' -d '{"url":"https://example.com/hello"}'
+code=paste-the-code-from-the-response
+curl -i -H 'User-Agent: Mozilla/5.0' -H 'Referer: https://news.example.org/post' http://localhost:8080/$code
+curl http://localhost:8080/api/v1/links/$code/stats
+curl http://localhost:8080/api/v1/links/$code/analytics
+curl -i http://localhost:8080/zzNoSuch9
 ```
 
-### Mock mode (default, no login needed)
+### What you should see
 
-```bash
-java -jar target/orchestrator-0.1.0-SNAPSHOT.jar \
-  --scenario=demo --change-type=greenfield \
-  --request="Build a URL shortener with create, redirect, and click counting."
+| Call | Result |
+|---|---|
+| Create | A short `code`, `shortUrl` and `expiresAt` 30 days out |
+| Visit the code | `302` with `Location: https://example.com/hello` |
+| Stats | `clickCount` of 1 |
+| Analytics | 1 click, `news.example.org` as top referrer, 1 `BROWSER` |
+| Unknown code | `404` |
+
+The full API is in [url-shortener/README.md](../url-shortener/README.md).
+
+## Live mode with Copilot
+
+- Run `copilot login` once.
+- Add `--orchestrator.agent.mode=copilot` to **every** command for that run.
+- If you forget it on a later command, that command silently uses the mock AI.
+- Check each stage's output before you approve it.
+- Models per stage are set in `orchestrator/src/main/resources/application.yml`.
+
+## CLI reference
+
+| Command | Does |
+|---|---|
+| `--scenario=<name> --change-type=greenfield\|brownfield --request=<text>` | Start a run |
+| `--approve=<run>:<stage> --actor=<name>` | Approve a stage and continue |
+| `--reject=<run>:<stage> --reason=<text> --replan` | Reject a stage and re-run it with the reason |
+| `--replan=<run>:<stage> --reason=<text>` | Re-run a stage. Downstream stages go stale. |
+| `--resume=<run>` | Continue a paused run |
+| `--status=<run>` | Show stages and approvals |
+| `--lineage=<run>` | Show output hashes per revision |
+| `--metrics[=<run>]` | Show reliability metrics |
+| `--export=<run> --to=scenarios/<name>` | Copy evidence after a secret scan |
+| `--chaos=<stage>:<count\|always>` | Inject failures to demo recovery |
+
+- Use `greenfield` for new code. It skips impact analysis.
+- Use `brownfield` for changes to existing code.
+- In PowerShell, wrap multi-word values in single quotes inside the argument, like `--reason='too vague'`. Otherwise the value is cut at the first space.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `JAVA_HOME is not defined correctly` | Set `JAVA_HOME` in this terminal (step 1) |
+| `java` is not recognized | Use the full path, `& "$env:JAVA_HOME\bin\java.exe"` |
+| `unknown run` | Use the full run id, not a part of it |
+| `Unexpected token` in PowerShell | Put the command on one line. PowerShell does not use `\` to continue lines. |
+| `400 Failed to read request` from `curl.exe` | Use `Invoke-RestMethod` as shown above |
+| `Port 8080 was already in use` | Stop the old server, then start again |
+
+To stop an old server on Windows:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8080 | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
-
-Every stage returns deterministic placeholder text from `MockAgentRuntime` — useful for exercising the
-workflow, gates, and recovery logic without any AI provider.
-
-### Live mode (real GitHub Copilot models)
-
-Append `--orchestrator.agent.mode=copilot` to **every single invocation for that run**, not just the first:
-
-```bash
-java -jar target/orchestrator-0.1.0-SNAPSHOT.jar \
-  --scenario=demo --change-type=greenfield --request="..." \
-  --orchestrator.agent.mode=copilot
-```
-
-> **This is the single most common operator mistake across all three scenario runs.** Each CLI invocation
-> is a fresh JVM that reads `application.yml` from scratch; the property is *not* remembered between
-> commands. Forgetting it on a later `--approve`/`--replan` call silently falls back to mock mode, visible
-> only as literal "(mock output)" placeholder text in the next stage's markdown. There is no warning —
-> always check the stage output before approving it.
-
-Models per stage are configured in `orchestrator/src/main/resources/application.yml` under
-`orchestrator.agent.models` (Opus for requirements/impact-analysis/design, Sonnet for code/tests/docs/
-release-readiness by default); the fallback chain is under `orchestrator.recovery.fallback-models`.
-
-### Driving a run
-
-```text
---scenario=<name> [--change-type=greenfield|brownfield] [--request=<text>]   start a run
-    [--chaos=<stage>:<count|always>[,...]]                                    inject failures to demo recovery
---approve=<run>:<stage> [--actor=<name>] [--reason=<text>]                    approve, then resume
---reject=<run>:<stage> --reason=<text> [--actor=<name>] [--replan]            reject; --replan redoes the stage
---replan=<run>:<stage> --reason=<text> [--actor=<name>]                       redo a stage; changed outputs make
-                                                                               downstream stages STALE
---resume=<run>                                                                continue a paused run
---status=<run>                                                                show stages and approvals
---lineage=<run>                                                               show output hashes per revision
---metrics[=<run>]                                                             reliability metrics
---export=<run> --to=scenarios/<name>                                         copy scenario evidence (scanned first)
---stage=<id> --request=<text>                                                preview one stage
-```
-
-`--change-type` distinguishes greenfield (the `impact-analysis` stage is skipped — there is nothing to
-analyze impact against) from brownfield (every stage runs). A deliberately ambiguous request should still
-be submitted as `brownfield` if it targets the existing `url-shortener/` code, as in the
-`ambiguous-analytics` scenario.
-
-**Multi-word `--reason=`/`--request=` values on PowerShell** must be wrapped in explicit single quotes
-inside the double-quoted argument, e.g. `--reason='$feedbackVariable'`, or Spring Boot's argument tokenizer
-will silently truncate the value at the first space.
-
-### Reviewing and exporting a run
-
-Each stage's output is written to `orchestrator/runs/<run-id>/<stage>.md` for review before approving. Once
-a run reaches a terminal state (`SAFE_STOPPED`, `FAILED`, or all the way to `release-readiness` approval),
-export its evidence:
-
-```bash
-java -jar target/orchestrator-0.1.0-SNAPSHOT.jar --export=<run-id> --to=scenarios/<name>
-```
-
-This scans everything for secrets, local paths, and personal emails first and refuses to write if it finds
-any.
-
-## Known gap: resuming a `SAFE_STOPPED` run
-
-There is currently no command to resume a `SAFE_STOPPED` run after an out-of-band human fix (see
-`docs/RISKS.md`). All three scenarios needed `docs`/`policy-scan`/`release-readiness` written by hand for
-this reason — the automated run had already rolled back by the time the human recovery was done.
