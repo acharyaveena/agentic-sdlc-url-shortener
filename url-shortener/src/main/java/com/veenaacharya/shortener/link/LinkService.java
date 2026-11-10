@@ -1,5 +1,9 @@
 package com.veenaacharya.shortener.link;
 
+import com.veenaacharya.shortener.analytics.ClickEvent;
+import com.veenaacharya.shortener.analytics.ClickEventRepository;
+import com.veenaacharya.shortener.analytics.ReferrerHostExtractor;
+import com.veenaacharya.shortener.analytics.UserAgentClassifier;
 import com.veenaacharya.shortener.code.ShortCodeGenerator;
 import com.veenaacharya.shortener.config.AppProperties;
 import com.veenaacharya.shortener.validation.UrlValidator;
@@ -17,14 +21,22 @@ public class LinkService {
     private final UrlValidator validator;
     private final AppProperties properties;
     private final Clock clock;
+    private final ClickEventRepository clickEvents;
+    private final UserAgentClassifier userAgentClassifier;
+    private final ReferrerHostExtractor referrerHostExtractor;
 
     public LinkService(LinkRepository repository, ShortCodeGenerator generator,
-                       UrlValidator validator, AppProperties properties, Clock clock) {
+                       UrlValidator validator, AppProperties properties, Clock clock,
+                       ClickEventRepository clickEvents, UserAgentClassifier userAgentClassifier,
+                       ReferrerHostExtractor referrerHostExtractor) {
         this.repository = repository;
         this.generator = generator;
         this.validator = validator;
         this.properties = properties;
         this.clock = clock;
+        this.clickEvents = clickEvents;
+        this.userAgentClassifier = userAgentClassifier;
+        this.referrerHostExtractor = referrerHostExtractor;
     }
 
     // Not transactional: each insert must commit or fail on its own so a collision can be retried.
@@ -50,6 +62,13 @@ public class LinkService {
 
     @Transactional
     public String resolve(String code) {
+        return resolve(code, ClickMetadata.none());
+    }
+
+    // Click events are recorded in the same transaction as the counter increment: a failed insert
+    // fails the redirect rather than silently losing analytics data.
+    @Transactional
+    public String resolve(String code, ClickMetadata metadata) {
         Link link = repository.findByShortCode(code).orElseThrow(() -> new LinkNotFoundException(code));
         if (link.isExpired(Instant.now(clock))) {
             throw new LinkExpiredException(code);
@@ -57,6 +76,8 @@ public class LinkService {
         if (repository.incrementClickCount(code) == 0) {
             throw new LinkNotFoundException(code);
         }
+        clickEvents.save(new ClickEvent(null, link.id(), Instant.now(clock),
+                referrerHostExtractor.extract(metadata.referer()), userAgentClassifier.classify(metadata.userAgent())));
         return link.longUrl();
     }
 

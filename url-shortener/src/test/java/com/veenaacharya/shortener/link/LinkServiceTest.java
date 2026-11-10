@@ -8,6 +8,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.veenaacharya.shortener.analytics.ClickEventRepository;
+import com.veenaacharya.shortener.analytics.ReferrerHostExtractor;
+import com.veenaacharya.shortener.analytics.UserAgentClassifier;
 import com.veenaacharya.shortener.code.ShortCodeGenerator;
 import com.veenaacharya.shortener.config.AppProperties;
 import com.veenaacharya.shortener.support.TestProps;
@@ -47,6 +50,15 @@ class LinkServiceTest {
 
     @Spy
     Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+
+    @Mock
+    ClickEventRepository clickEvents;
+
+    @Mock
+    UserAgentClassifier userAgentClassifier;
+
+    @Mock
+    ReferrerHostExtractor referrerHostExtractor;
 
     @InjectMocks
     LinkService service;

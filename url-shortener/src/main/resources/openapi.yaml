@@ -59,6 +59,44 @@ paths:
                 $ref: '#/components/schemas/LinkStats'
         '404':
           $ref: '#/components/responses/NotFound'
+  /api/v1/links/{code}/analytics:
+    get:
+      summary: Per-link click analytics for a UTC date range (read-only)
+      operationId: getLinkAnalytics
+      description: >
+        Click history recorded from deployment onward, bucketed by UTC day. Available for
+        expired links. Can differ from the all-time counter returned by .../stats.
+      parameters:
+        - $ref: '#/components/parameters/Code'
+        - name: from
+          in: query
+          required: false
+          description: Inclusive UTC start date. Defaults to `to` minus (app.analytics.default-range-days - 1).
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: false
+          description: Inclusive UTC end date. Defaults to today (UTC).
+          schema: { type: string, format: date }
+        - name: excludeBots
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Analytics for the requested range
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkAnalyticsResponse'
+        '400':
+          description: from later than to, range over app.analytics.max-range-days, or a malformed parameter
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /{code}:
     get:
       summary: Redirect to the long URL and count the click
@@ -122,6 +160,45 @@ components:
         longUrl:    { type: string, format: uri }
         clickCount: { type: integer, format: int64, minimum: 0 }
         createdAt:  { type: string, format: date-time }
+    LinkAnalyticsResponse:
+      type: object
+      required: [code, from, to, excludeBots, totalClicks, daily, topReferrers, userAgents]
+      properties:
+        code: { type: string }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        excludeBots: { type: boolean }
+        totalClicks:
+          type: integer
+          format: int64
+          description: Clicks in range after the bot filter. History starts at deployment.
+        daily:
+          type: array
+          description: One entry per day from "from" to "to", zero-filled.
+          items: { $ref: '#/components/schemas/DailyClicks' }
+        topReferrers:
+          type: array
+          description: Referrer hosts only (never full URLs), ordered by clicks descending then host ascending.
+          items: { $ref: '#/components/schemas/ReferrerCount' }
+        userAgents:
+          type: object
+          required: [BROWSER, BOT, OTHER]
+          properties:
+            BROWSER: { type: integer, format: int64 }
+            BOT: { type: integer, format: int64 }
+            OTHER: { type: integer, format: int64 }
+    DailyClicks:
+      type: object
+      required: [date, clicks]
+      properties:
+        date: { type: string, format: date }
+        clicks: { type: integer, format: int64 }
+    ReferrerCount:
+      type: object
+      required: [host, clicks]
+      properties:
+        host: { type: string, example: a.com }
+        clicks: { type: integer, format: int64 }
     ProblemDetail:
       type: object
       description: RFC 7807 problem details

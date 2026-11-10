@@ -15,6 +15,7 @@ public class AppProperties {
     private int maxCodeAttempts = 5;
     private RateLimit rateLimit = new RateLimit();
     private Link link = new Link();
+    private Analytics analytics = new Analytics();
 
     public String getBaseUrl() {
         return baseUrl;
@@ -72,6 +73,14 @@ public class AppProperties {
         this.link = link;
     }
 
+    public Analytics getAnalytics() {
+        return analytics;
+    }
+
+    public void setAnalytics(Analytics analytics) {
+        this.analytics = analytics;
+    }
+
     public static class RateLimit {
 
         private int requests = 10;
@@ -122,6 +131,37 @@ public class AppProperties {
 
         public void setCleanupGrace(Duration cleanupGrace) {
             this.cleanupGrace = cleanupGrace;
+        }
+    }
+
+    public static class Analytics {
+
+        private int defaultRangeDays = 30;
+        private int maxRangeDays = 366;
+        private int topReferrersLimit = 10;
+
+        public int getDefaultRangeDays() {
+            return defaultRangeDays;
+        }
+
+        public void setDefaultRangeDays(int defaultRangeDays) {
+            this.defaultRangeDays = defaultRangeDays;
+        }
+
+        public int getMaxRangeDays() {
+            return maxRangeDays;
+        }
+
+        public void setMaxRangeDays(int maxRangeDays) {
+            this.maxRangeDays = maxRangeDays;
+        }
+
+        public int getTopReferrersLimit() {
+            return topReferrersLimit;
+        }
+
+        public void setTopReferrersLimit(int topReferrersLimit) {
+            this.topReferrersLimit = topReferrersLimit;
         }
     }
 }
